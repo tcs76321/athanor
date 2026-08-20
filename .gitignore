@@ -1,0 +1,12 @@
+# Spike build artifacts
+/spikes/**/build/*.so
+/spikes/**/build/*.dylib
+/spikes/**/build/*.dll
+/spikes/**/*.db
+/spikes/**/*.exe
+
+# Keep spike source code and docs
+!/spikes/**/*.go
+!/spikes/**/go.mod
+!/spikes/**/go.sum
+!/spikes/**/README.md

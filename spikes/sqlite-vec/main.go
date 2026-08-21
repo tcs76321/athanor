@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -17,7 +18,7 @@ import (
 func main() {
 	fmt.Println("=== mattn/go-sqlite3 (CGO) ===")
 	ctx := context.Background()
-	testDriver(ctx, "mattn", getExtensionPath())
+	testDriver(ctx, "mattn", findExtension())
 }
 
 func testDriver(ctx context.Context, name, extPath string) {
@@ -96,7 +97,11 @@ func testVec0(ctx context.Context, conn *sql.Conn, name string) error {
 		{0.9, 0.8, 0.7, 0.6},
 	}
 	for i, v := range vectors {
-		vecJSON, _ := json.Marshal(v)
+		vecJSON, err := json.Marshal(v)
+		if err != nil {
+			log.Printf("[%s] json.Marshal failed: %v", name, err)
+			return err
+		}
 		if _, err := conn.ExecContext(ctx, "INSERT INTO vec_items(rowid, embedding) VALUES (?, ?)", int64(i+1), string(vecJSON)); err != nil {
 			return err
 		}
@@ -104,7 +109,11 @@ func testVec0(ctx context.Context, conn *sql.Conn, name string) error {
 
 	fmt.Printf("[%s] Running KNN query...\n", name)
 	queryVec := []float32{0.15, 0.25, 0.35, 0.45}
-	queryJSON, _ := json.Marshal(queryVec)
+	queryJSON, err := json.Marshal(queryVec)
+	if err != nil {
+		log.Printf("[%s] json.Marshal failed: %v", name, err)
+		return err
+	}
 
 	// vec0 requires k = ? parameter for KNN queries
 	rows, err := conn.QueryContext(ctx, `
@@ -122,7 +131,10 @@ func testVec0(ctx context.Context, conn *sql.Conn, name string) error {
 	for rows.Next() {
 		var rowid int64
 		var dist float64
-		rows.Scan(&rowid, &dist)
+		if err := rows.Scan(&rowid, &dist); err != nil {
+			log.Printf("[%s] rows.Scan failed: %v", name, err)
+			return err
+		}
 		fmt.Printf("  rowid=%d distance=%.6f\n", rowid, dist)
 	}
 	return rows.Err()
@@ -150,20 +162,46 @@ func testFTS5(ctx context.Context, conn *sql.Conn, name string) error {
 	for rows.Next() {
 		var rowid int64
 		var rank float64
-		rows.Scan(&rowid, &rank)
+		if err := rows.Scan(&rowid, &rank); err != nil {
+			log.Printf("[%s] rows.Scan failed: %v", name, err)
+			return err
+		}
 		fmt.Printf("  rowid=%d rank=%.6f\n", rowid, rank)
 	}
 	return rows.Err()
 }
 
-func getExtensionPath() string {
+// findExtension searches the build/ directory for a valid sqlite-vec extension
+// matching the current platform. Returns the first match found.
+func findExtension() string {
+	var candidates []string
 	switch runtime.GOOS {
 	case "darwin":
-		return "build/vec.dylib"
+		candidates = []string{
+			"build/vec.dylib",
+			"build/vec0.dylib",
+			"build/sqlite-vec.dylib",
+		}
 	case "linux":
-		return "build/sqlite-vec.so"
+		candidates = []string{
+			"build/sqlite-vec.so",
+			"build/vec0.so",
+			"build/vec.so",
+		}
 	default:
 		log.Fatalf("Unsupported OS: %s", runtime.GOOS)
-		return ""
 	}
+
+	for _, candidate := range candidates {
+		absPath, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(absPath); err == nil {
+			return absPath
+		}
+	}
+
+	log.Fatalf("No sqlite-vec extension found in build/ for %s/%s. Candidates: %v", runtime.GOOS, runtime.GOARCH, candidates)
+	return ""
 }

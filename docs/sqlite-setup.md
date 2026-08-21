@@ -22,9 +22,11 @@ require github.com/mattn/go-sqlite3 v1.14.0
 CGO_ENABLED=1 go build .
 CGO_ENABLED=1 go run main.go
 
-# For FTS5 support, add build tag:
+# For FTS5 support, explicitly pass the build tag:
 CGO_ENABLED=1 go build -tags sqlite_fts5 .
 ```
+
+> **Note on FTS5:** While `mattn/go-sqlite3` may work with FTS5 out of the box on some systems (depending on how the system SQLite was compiled), **explicitly passing `-tags sqlite_fts5` is highly recommended for guaranteed cross-platform consistency**. This ensures the FTS5 module is compiled into the binary regardless of the host's SQLite configuration.
 
 ### Runtime Extension Loading Pattern (CRITICAL: Connection Affinity)
 ```go

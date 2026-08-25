@@ -7,8 +7,9 @@ An *athanor* is an alchemical furnace designed to burn continuously without inte
 ## 1. Design Principles
 
 - **Local-first.** Storage, inference, and execution stay on your hardware by default. Cloud inference is optional, budget-gated, and requires explicit approval.
-- **Containment-based trust.** Contained + reversible = no approval needed. External + irreversible = approval required.
-- **Ephemeral execution.** Every task runs in a fresh, hardened, rootless Job Pod, destroyed on completion.
+- **Containment-based trust.** Contained + reversible = no approval needed. External OR irreversible = approval required.
+- **Ephemeral execution.** Every task runs in a fresh, hardened, rootless Job Pod, destroyed on completion. Post-mortem evidence is captured in logs and artifact records, not live containers.
+- **Generalized but coding focused.** Coding is central to the architecture and function but not a singular and limiting consideration.
 - **Git as undo.** All code modifications are atomic commits on agent-created branches.
 - **Lossless over lossy.** Critical context is never summarized away — it is structurally divided and swapped. Compaction, when used, is deterministic (Temperature 0.0).
 - **Deterministic judgment.** Evaluation and comparison always run on the `security` persona at Temperature 0.0. Generation explores; judgment does not.
@@ -17,7 +18,8 @@ An *athanor* is an alchemical furnace designed to burn continuously without inte
 - **Feedback compounds.** Rejections with structured reasons are stored as `CorrectionRecord`s and injected into future prompts.
 - **Mountains and rivers.** Security constraints never change. Prompts and strategies evolve.
 - **Project-first, not chat-first.** The primary unit of interaction is a bounded project with an archetype and acceptance criteria — not a generic chat window.
-- **Test everything.** TDD at integration scale. Security tests adversarial. Prompt regressions tracked.
+- **Test and lint everything.** TDD at integration scale. Security tests for adversarial vectors. Scanning at multiple checkpoints.
+- **Append-only audit logs.** Everything leaves a footprint. Prompt regressions tracked. Winning strategies analyzed and reused. Losing strategies analyzed and remembered.
 
 ---
 
@@ -153,6 +155,9 @@ Every Job Pod receives a single-use, short-lived token scoped to its job ID at c
 | `AcceptanceCriteria` | Explicit, testable success conditions for a task |
 | `EvaluationRecord` | Deterministic judge/test output comparing artifacts |
 | `CorrectionRecord` | Structured negative feedback derived from failures |
+| `StrategyProfile` | Record of the personas, temperatures, templates, and candidate counts a job actually used |
+| `StrategyOutcome` | Immutable per-job result linked to a profile (acceptance, score, cost, retries) |
+| `StrategyInsight` | Derived winning/losing process pattern with evidence, scope, and lifecycle status |
 | `ExplorationPath` | Configured multi-step prompt/temperature sequence |
 | `HITLRequest` | Approval or user-input request with severity and expiry |
 | `EventLog` | Append-only audit trail |
@@ -666,6 +671,110 @@ stages:
 
 Exploration paths can be attached to projects or tasks, enabling custom workflows like "brainstorm-heavy" or "security-paranoid" modes.
 
+### 13.3 Strategy Profiles & Outcome Records
+
+Every job implicitly exercises a **strategy**: which personas ran which phases, at what temperatures, with which prompt templates, generating how many candidates, against what kind of task. Athanor records this explicitly so outcomes can accumulate into statistical evidence.
+
+This system is deliberately **separate from the Feedback System (§18)**:
+
+| | Feedback System (§18) | Strategy Analysis (§13.4) |
+|---|---|---|
+| Source | Human rejections/corrections and per-artifact failures | Aggregate outcomes across many jobs |
+| Signal | Prescriptive — "do not do X in this artifact" | Descriptive — "approach Y is accepted 2× more often on code tasks" |
+| Unit | `CorrectionRecord`, tied to an artifact | `StrategyInsight`, tied to a process pattern |
+| Application | Injected directly into prompts (assembly position 8) | Advisory: biases defaults, ranks templates, proposes changes |
+
+**StrategyProfile** — captured deterministically at job start from the persona plan (zero inference):
+
+```yaml
+id: uuid
+job_id: uuid
+project_id: uuid
+archetype: inherited
+exploration_path_id: optional
+signature:
+  - phase: diverging
+    persona: alternative
+    temperature: 0.9
+    prompt_template: template_id
+    candidates: 3
+  # ...one entry per executed phase
+task_features:
+  task_type: implementation | refactor | test_writing | research | brainstorm
+  difficulty_hint: from planning phase
+```
+
+**StrategyOutcome** — captured at job end, immutable once written:
+
+```yaml
+id: uuid
+job_id: uuid
+strategy_profile_id: uuid
+result: accepted_new | accepted_previous | rejected | failed | cancelled
+score: float
+evaluator_confidence: float
+retries: int
+reflection_loops: int
+token_cost: int
+wall_time: duration
+```
+
+Both records are written transactionally with the corresponding state transitions and retained indefinitely — they are small, and they are the dataset everything in §13.4 learns from.
+
+### 13.4 Strategy Analysis Engine
+
+Aggregation is **deterministic** (grouping/ranking over `StrategyOutcome`s), run offline — primarily as the Daydreaming *Strategy Mining* action (§17.1). An optional Temp 0.0 `security` pass phrases detected patterns; it never invents numbers.
+
+**Detection.** Outcomes are grouped by signature features (and feature pairs) within a scope (project or global), compared against the baseline for the same archetype/task mix:
+
+```text
+insight_candidate if
+  cohort_jobs >= min_cohort_size
+  AND |accept_rate - baseline_accept_rate| >= min_accept_rate_delta
+  AND evaluator_confidence delta is directionally consistent
+  AND no larger containing cohort contradicts it
+```
+
+*Winning*: higher accept rate and/or score — or equal quality at meaningfully lower retries/token cost. *Losing*: correlated with rejection, failure, loop alarms, or high retry counts. Losing insights are at least as valuable as winning ones; they justify earlier escalation and tighter budgets.
+
+**StrategyInsight object:**
+
+```yaml
+id: uuid
+scope: project | global
+polarity: winning | losing
+pattern:
+  feature: diverging.persona
+  value: alternative
+  context: archetype=code
+evidence:
+  cohort_jobs: int
+  accept_rate: float
+  baseline_accept_rate: float
+  median_score: float
+  median_retries: int
+  median_token_cost: int
+statement: "Divergence led by 'alternative' doubled acceptance on code tasks."
+status: proposed | active | muted | retired
+created_at: timestamp
+updated_at: timestamp
+```
+
+**Lifecycle:** `proposed` (mined; inert) → `active` (promoted via HITL confirmation, §20.1) → `muted` (user-suppressed; evidence kept) or `retired` (contradicted by newer evidence or expired). Auto-promotion of conservative insights is possible via configuration but defaults off.
+
+**Application channels** (rivers, never mountains):
+
+1. **Persona-plan defaults.** Active insights deterministically bias default persona/temperature selection for matching tasks; every bias application is logged to the `EventLog`.
+2. **Template ranking.** Preferred prompt templates are ordered by insight evidence within each phase.
+3. **ExplorationPath proposals.** Recurring winning signatures surface as draft `ExplorationPath` proposals for user review.
+4. **Strategy notes in prompts.** A short, versioned runtime-tier line derived only from *active* insights (e.g., "on similar tasks, divergence led by `alternative` was accepted twice as often"), included in token accounting.
+
+**Guardrails:**
+- Insights never modify static prompts, security policy, or evaluation rubrics — attempts trip the `drift` alarm (§22.3).
+- Aggregation math is pure and unit-tested; the LLM only phrases results, at Temp 0.0.
+- Every insight carries its evidence inline; the UI shows cohort size and deltas so users can judge for themselves.
+- All computation is local. Nothing leaves the machine.
+
 ---
 
 ## 14. Coding Workflow
@@ -767,6 +876,7 @@ When the job queue is empty, the system is idle, and AC power is present, Athano
 | **Skill Refinement** | `main` | Review past `CorrectionRecord`s. Attempt to write new Python skills or update prompt templates to prevent past failures. **Must pass security scan. Must not modify static prompts.** |
 | **Proactive Documentation** | `main` | Scan for undocumented functions (missing docstrings, missing README sections). Generate draft markdown documentation artifacts for user review. |
 | **Feedback Review** | `security` (temp 0.0) | Analyze patterns in rejections and failures. Propose new global `CorrectionRecord`s derived from repeated project-level corrections. |
+| **Strategy Mining** | `security` (temp 0.0) | Run deterministic aggregation over `StrategyOutcome`s (§13.4). Detect winning/losing patterns; create proposed `StrategyInsight`s. Read-only over history; produces proposals only. |
 
 ### 17.2 Daydreaming Constraints
 
@@ -782,12 +892,14 @@ When the job queue is empty, the system is idle, and AC power is present, Athano
 id: uuid
 started_at: timestamp
 finished_at: timestamp
-action: memory_consolidation | repo_exploration | skill_refinement | proactive_documentation | feedback_review
+action: memory_consolidation | repo_exploration | skill_refinement | proactive_documentation | feedback_review | strategy_mining
 persona_used: persona
 artifacts_produced:
   - artifact_ids (all draft status)
 corrections_proposed:
   - correction_ids
+insights_proposed:
+  - strategy_insight_ids
 memory_compacted:
   chunks_processed: int
   tokens_saved: int
@@ -798,7 +910,7 @@ dormant_index_entries_added: int
 
 ## 18. Feedback System
 
-Feedback is the primary mechanism for self-improvement.
+Feedback and strategy analysis (§13.4) are the twin mechanisms for self-improvement: this section captures **prescriptive** lessons about artifacts (mostly from humans); §13.4 mines **statistical** lessons about process (mostly from aggregate outcomes).
 
 ### 18.1 Feedback Sources
 
@@ -890,7 +1002,7 @@ HITL is not a report. It is a live queue.
 
 ### 20.1 HITL Request Types
 
-Approve external domain access · remote Git push · package installation · destructive operation · cloud inference usage · high compute budget · Browser Mode · resolve ambiguity (provide missing context) · provide missing credential through broker · accept or reject artifact · confirm project-scope correction · confirm global correction.
+Approve external domain access · remote Git push · package installation · destructive operation · cloud inference usage · high compute budget · Browser Mode · resolve ambiguity (provide missing context) · provide missing credential through broker · accept or reject artifact · confirm project-scope correction · confirm global correction · activate strategy insight · mute strategy insight.
 
 ### 20.2 HITL Request Object
 
@@ -1095,6 +1207,7 @@ SQLite stores:
 - HITL requests, Event logs.
 - Token usage, Network rules.
 - Model persona assignments, Configuration metadata.
+- Strategy profiles, outcomes, and insights.
 - Daydream logs.
 
 ### 23.3 State Persistence Rules
@@ -1257,7 +1370,7 @@ Skills return structured results:
 
 **Security View:** Quarantined files, scan failures, prompt-injection detections, alarm history, kill switch, sandbox status.
 
-**Statistics:** Approval rate, rejection rate and categories, token usage by persona/project, job success rate, test pass rate, average job duration, budget usage, Daydreaming productivity (artifacts proposed, corrections derived, memory compacted).
+**Statistics:** Approval rate, rejection rate and categories, token usage by persona/project, job success rate, test pass rate, average job duration, budget usage, Daydreaming productivity (artifacts proposed, corrections derived, memory compacted), strategy win rates by persona/phase/archetype, active strategy insights with inline evidence.
 
 **Settings:** Models and personas, context minimums, power policy, network allowlist, backup schedule, cloud fallback, token budgets, telemetry preferences, workspace paths, security level, Daydreaming config.
 
@@ -1289,6 +1402,7 @@ Athanor logs structured JSON events to SQLite and `state/logs/`:
 | `podman` | Job Pod creation, teardown, socket access |
 | `inference` | Model loads, context calculations, KV cache pressure, latency warnings |
 | `feedback` | Correction creation, injection, applied counts |
+| `strategy` | Profile/outcome capture, insight generation, promotion/expiry/muting, application decisions |
 | `context` | Division events, compaction events, swap events, Dormant Index updates |
 | `daydream` | Idle start/stop, actions taken, artifacts produced |
 | `power` | AC/battery transitions, sleep/wake, throttle events |
@@ -1384,6 +1498,15 @@ execution:
     planning: 120s
     evaluating: 600s        # must accommodate Job Pod boot + test suite
     default: 300s
+
+strategy_analysis:
+  enabled: true
+  min_cohort_size: 20
+  min_accept_rate_delta: 0.15
+  auto_promote: false            # promote conservative insights without HITL
+  max_active_insights: 10
+  insight_expiry_days: 90
+  strategy_notes_in_prompts: true
 
 limits:
   max_concurrent_jobs: 2
@@ -1519,6 +1642,7 @@ Requires explicit confirmation.
 - Prompt assembly order and token accounting.
 - Feedback injection ordering by severity and scope.
 - Configuration parsing and validation.
+- Strategy aggregation determinism and insight lifecycle transitions.
 
 ### 31.2 Integration Tests
 - Podman Job Pod creation and strict teardown validation.
@@ -1542,6 +1666,7 @@ Requires explicit confirmation.
 - **Recovery:** Kill Core Pod mid-job. Restart. Verify: job resumes from last checkpoint → partial artifacts quarantined → no state loss.
 - **Context Swap:** Submit a task requiring a large repository. Verify: Dormant Index generated → LLM issues `context_swap` → correct chunk loaded byte-for-byte → LLM continues execution.
 - **Feedback Loop:** Reject an artifact with a structured reason. Verify: `CorrectionRecord` created → injected into next job → LLM avoids the identified mistake.
+- **Strategy Analysis:** Run enough synthetic jobs with known outcomes to cross `min_cohort_size`. Verify: profile + outcome captured for every job → insight proposed at threshold → proposed insight does not affect prompts → approved insight biases the next persona plan (logged in EventLog).
 
 ---
 

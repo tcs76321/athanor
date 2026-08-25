@@ -225,6 +225,8 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | M6-T7 | Feedback injection into prompt assembly: vector-similarity retrieval, severity/scope ordering, mute/edit/promote via API | M | code | High-severity project corrections outrank others; injection positions logged with token accounting | §11, §18.3 |
 | M6-T8 | Web UI v1: dashboard (jobs, approvals, alarms, power), projects CRUD, approvals queue, watch view (SSE token stream, phase tree, tool log, interruption queue) | L | code | Watch view shows live phase transitions for a running job; interruption note appears at next safe point, never mid-token | §20, §27 |
 | M6-T9 | Feedback-loop E2E: reject artifact with structured reason → CorrectionRecord created → injected into next job → mistake avoided | M | test | Automated E2E asserts the correction's derived rule appears in the next prompt and behavior changes | §31.4 |
+| M6-T10 | Strategy capture: persist StrategyProfile at job start and immutable StrategyOutcome at job end, transactionally with state transitions | M | code | Every completed job has both records; capture derives from persona plan (zero inference); pre-capture jobs backfillable from persona_plan | §13.3 |
+| M6-T11 | Strategy analysis engine: deterministic aggregation over outcomes, proposed insights at thresholds, HITL-gated activation/muting, Statistics panel | L | code | Synthetic outcome corpus yields expected insight; *proposed* insights provably never affect prompts or persona plans; promotion requires approval and is logged | §13.4 |
 
 **Gate G6:** HITL gates every external/irreversible action (proven by attempting each type); feedback-loop E2E green; multi-task DAG demo passes unattended.
 

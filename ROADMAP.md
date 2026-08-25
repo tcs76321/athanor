@@ -102,7 +102,7 @@ M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 ──► M6
        │      │             └── M4 can start once M3's evaluation phase
        │      │                 exists (gateway needed by research tasks)
        │      └── M2 spike may run in parallel with late M1
-       └── docs/adr/ created at M0
+       └── docs/adr/ seeded (ADR-0001/0002 written pre-M0 during doc review)
 ```
 
 Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤ 2h, **M** 2–4h, **L** 4–8h. If a task overruns its size significantly, stop and split it or spike it.
@@ -135,10 +135,10 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 
 | ID | Task | Size | Type | Acceptance Criteria | Refs |
 |---|---|---|---|---|---|
-| M1-T1 | Persona registry + Ollama client (model load with context target + temperature per persona) | M | code | Each configured persona loads its model; requests honor persona temperature/context; unreachable Ollama fails loudly | §12 |
+| M1-T1 | Persona registry + Ollama client (model load with context target + temperature per persona) | M | code | Each configured persona loads its model; requests honor persona temperature/context; unreachable Ollama fails loudly; phase-pinned temperatures override persona defaults per §13.1 | §12 |
 | M1-T2 | Context feasibility check honoring context floors (recommend-or-escalate path; no silent reduction) | M | code | Hardware below floor → job pauses with recommendation logged, never truncates silently | §12.3 |
 | M1-T3 | Prompt assembly v1: deterministic order for the subset that exists (system, project/task context, criteria, phase instructions) with per-section token accounting | M | code | Same inputs → byte-identical prompt; token counts logged to EventLog | §11 |
-| M1-T4 | Job state machine skeleton: queued → context_building → planning → diverging (single candidate) → synthesizing → comparing → completed; state persisted after every transition. Note: `evaluating`/`reflecting` edges arrive with Job Pods in M3-T1 — §8.2's mandatory `diverging → evaluating` edge applies from M3 onward | L | code | Kill -9 at any point mid-job → restart resumes from last committed state; illegal transitions rejected by tests | §8 |
+| M1-T4 | Job state machine skeleton: queued → context_building → planning → diverging (single candidate) → synthesizing → comparing → completed; state persisted after every transition. Note: `evaluating`/`reflecting` edges arrive with Job Pods in M3-T1 — §8.2's mandatory `diverging → evaluating` edge applies from M3 onward (phased-introduction rationale: `docs/adr/0001-phased-state-machine.md`) | L | code | Kill -9 at any point mid-job → restart resumes from last committed state; illegal transitions rejected by tests | §8 |
 | M1-T5 | Artifact store: create draft artifacts, version them, list per project | M | code | Draft artifacts persisted with type/version/status; visible via CLI listing | §9 |
 | M1-T6 | Kill switch (CLI flag + endpoint) freezing all new work | S | code | Frozen state survives restart; unfreeze requires explicit command (logged) | §22 |
 | M1-T7 | Minimal CLI: create project, submit goal, stream job progress | M | code | Fresh clone → running daemon → submitted goal → draft artifact on disk, in under 5 minutes of user time | — |
@@ -167,7 +167,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 
 | ID | Task | Size | Type | Acceptance Criteria | Refs |
 |---|---|---|---|---|---|
-| M3-T1 | Full phase executor: planning, diverging (N candidates), evaluating (incl. `running_tests` sub-state), reflecting branch logic, synthesizing, comparing | L | code | State machine in §8 implemented exactly; every transition persisted; unit tests cover all legal/illegal edges | §8, §13 |
+| M3-T1 | Full phase executor: planning, diverging (N candidates), evaluating (incl. `running_tests` sub-state), reflecting branch logic, synthesizing, comparing | L | code | State machine in §8 implemented exactly; every transition persisted; unit tests cover all legal/illegal edges; temperature resolution follows §13.1 precedence (ExplorationPath stage > phase > persona) | §8, §13 |
 | M3-T2 | Evaluation phase: acceptance-criteria checks, linter runs, test runs in Job Pod; `EvaluationRecord` persistence | L | code | Records capture pass/fail, missing criteria, scores; evaluation always `security` persona Temp 0.0 (asserted in tests) | §19 |
 | M3-T3 | Comparison phase: winner determination (`new\|previous\|none`) with confidence + reasons; artifact status flow enforced | M | code | Comparison rule (§19.3) implemented as a pure function over EvaluationRecords; fully unit-tested | §9, §19 |
 | M3-T4 | Budgets & retries: per-phase wall-time budgets, max candidates, recovery counters, budget-exhaustion escalation | M | code | Exceeded budgets pause/escalate per policy; counters survive restart | §29 |
@@ -240,7 +240,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | ID | Task | Size | Type | Acceptance Criteria | Refs |
 |---|---|---|---|---|---|
 | M7-T1 | Power/idle integration: wire `internal/power` profiles (rename VM-era terms to pods), AC/battery gating, sleep→flush+pause, wake→resume-from-checkpoint | M | code | Sleep/wake cycle mid-job resumes correctly; battery below threshold pauses with state flushed | §24 |
-| M7-T2 | Daydreaming engine: all six actions (§17.1, including Strategy Mining, which depends on the records produced by M6-T10/T11) with constraints (priority yield, budgets, draft-only output, no battery) + `DaydreamLog` | L | code | Daydream job yields within seconds when real work arrives; outputs all draft; log persisted per session | §17 |
+| M7-T2 | Daydreaming engine: five actions (§17.1 — memory consolidation, repo exploration, proactive documentation, feedback review, strategy mining [strategy mining depends on the records produced by M6-T10/T11]; `skill_refinement` is deferred with the skills runtime, see backlog) with constraints (priority yield, budgets, draft-only output, no battery) + `DaydreamLog` | L | code | Daydream job yields within seconds when real work arrives; outputs all draft; log persisted per session | §17 |
 | M7-T3 | Alarms: categories and levels per §22.3, wired to their triggers (loop, resource, quality >50%, stuck, hallucination, budget, security, drift, self-modification) | M | code | Each alarm category has a triggered test; critical alarms freeze the system | §22 |
 | M7-T4 | Backups: scheduled local backups, retention, restore drill documented and tested | S | code | Restore from backup produces working state; retention prunes correctly | §23.4 |
 | M7-T5 | `athanor doctor`: full check list incl. context-feasibility and model availability with remediation suggestions | M | code | Doctor catches each seeded fault (no podman, no ollama, missing model, low RAM) with actionable output | §30.2 |
@@ -262,7 +262,7 @@ Post-M7 capability. Listed so ideas have a home without derailing the current mi
 |---|---|
 | Browser Mode | Isolated pod + proxied gateway; HITL-gated. Needs real demand before building. |
 | Cloud inference mediation | Credential broker path for approved outbound calls. Design exists (§21.7); wait for need. |
-| Skills runtime | Python skill objects, OCI packaging, permission declarations, scanner integration (§26). |
+| Skills runtime | Python skill objects, OCI packaging, permission declarations, scanner integration (§26). Includes the `skill_refinement` daydream action (§17.1), deferred from M7-T2. |
 | Exploration Paths | User-definable prompt/temperature sequences (§13.2). Requires stable loop quality first (see M3-T7). |
 | Media/data archetype depth | Toolchains, render commands, dataset validation. Text/code/document archetypes carry MVP. |
 | Full Statistics / Memory Browser views | Retrieval test tool, compaction layer viewer, usage dashboards (§27). |

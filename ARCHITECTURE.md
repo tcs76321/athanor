@@ -316,6 +316,8 @@ cancelled
 ```
 
 > **Note on `running_tests`:** test execution is part of the Evaluation phase (Phase 3). It is tracked as a sub-state of `evaluating` rather than a separate top-level state, so a crash during a test run resumes into `evaluating`, not an ambiguous intermediate state.
+>
+> **Note on `interrupted`:** `interrupted` is a recovery flag recorded on the Job (§8.3) after a crash or power loss — it is **not** a state-machine state. An interrupted job retains its last committed state and resumes from checkpoint per §23.6.
 
 ### 8.2 State Machine Rules
 
@@ -353,6 +355,7 @@ started_at: timestamp
 finished_at: timestamp
 error: optional
 recovery_count: int
+interrupted: bool          # recovery flag (not a state): set by crash recovery, cleared on successful resume (§23.6)
 ```
 
 ---
@@ -455,6 +458,8 @@ The MCE does not only manage context at job start — it monitors KV cache usage
 | Context floor violation (effective context < task minimum) | Pause job. Recommend smaller model or reduce task scope. Escalate to HITL. |
 
 ### 10.5 Context Assembly Priority
+
+This ordering governs KV-cache budgeting and eviction only; prompt construction order is defined separately in §11.2.
 
 When building a prompt for a new job or phase, the MCE fills the available KV cache via a priority queue:
 
@@ -591,11 +596,23 @@ If `effective_context < task_context_minimum`:
 - Allow Ollama to unload idle models.
 - Prefer reusing already-loaded models for repeated jobs.
 
+### 12.6 Context Floors vs. Persona Targets
+
+Archetype context floors (`context_engine.*_floor`, §29) and persona context targets can disagree — e.g., `coding_floor` is 32768 while `tall` targets 16384. Resolution rules:
+
+- Floors are **role-scoped working-set requirements**, not per-task constants. They bind to the personas whose phases consume full-fidelity content chunks: `main` and `alternative` (generation), `security` (evaluation/compaction over large outputs), and `wide` (ingestion).
+- `tall` is deliberately exempt during **Planning and DAG Decomposition phases only**. Those phases operate on task descriptions, acceptance criteria, and Dormant Index metadata — not raw code chunks — so `tall`'s constrained target (8k–16k) does not violate the floor. If planning requires source insight beyond `tall`'s target, ingestion is delegated to `wide` (division + indexing) and `tall` pulls distilled chunks via `context_swap`.
+- Feasibility is therefore checked per **(persona, phase)** pair: `required_context = max(persona_context_target, role_applicable_floor)`. Context is never silently reduced below either bound; violations follow the §12.3 escalation path.
+
+> Rationale and rejected alternatives: `docs/adr/0002-context-floor-semantics.md`.
+
 ---
 
 ## 13. The Dialectical Execution Engine
 
 Complex tasks are solved via a multi-phase, multi-temperature state machine.
+
+**Temperature precedence:** where a phase pins a temperature, the phase value overrides the persona's configured default (the persona default applies only when a phase leaves temperature open). An attached ExplorationPath stage overrides both. The resolved temperature for every LLM call is written to the `EventLog`. Phase temperatures below are stated as ranges; when a persona's configured default falls outside the range for that phase, the phase value wins.
 
 ### 13.1 Phase Definitions
 
@@ -995,6 +1012,8 @@ AND no_new_security_issue
 AND evaluator_confidence > threshold
 ```
 
+Where `threshold` is `execution.min_judge_confidence` in the configuration reference (§29).
+
 ---
 
 ## 20. Human-in-the-Loop (HITL) System
@@ -1246,7 +1265,7 @@ Backups include: SQLite database, configuration, prompt templates, feedback reco
 ### 23.6 Recovery From Power Loss
 
 - SQLite state is recovered from WAL.
-- Incomplete job is marked `interrupted`.
+- Incomplete job is flagged `interrupted` (a recovery flag on the Job record, §8.3 — not a state-machine state; the job retains its last committed state).
 - Partial artifacts are marked `quarantined` or `draft`.
 - Job resumes from last committed checkpoint on next startup.
 - If no checkpoint is valid, job restarts with a recorded reason in `EventLog`.
@@ -1475,6 +1494,7 @@ personas:
     temperature: 0.8
 
 context_engine:
+  # Floors are role-scoped working-set requirements, not per-task constants (§12.6).
   coding_floor: 32768
   research_floor: 32768
   document_floor: 16384
@@ -1491,6 +1511,7 @@ execution:
   require_tests_for_code: true
   require_documentation_for_code: true
   compare_before_accept: true
+  min_judge_confidence: 0.7   # comparison confidence threshold in §19.3
   # Wall-time budgets are enforced per Dialectical phase (planning, diverging,
   # evaluating, reflecting, synthesizing, comparing). A single global job timeout
   # cannot fairly cover both a quick reflection and a full test-suite run in a

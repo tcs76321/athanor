@@ -49,7 +49,7 @@ This roadmap defines **what must be true** after each milestone and **what may n
 - **Containment precedes capability.** No autonomous behavior is added before the guardrail that bounds it exists.
 - **Spike → harden → automate.** Prove feasibility by hand, implement properly, lock in with tests.
 - **TDD where acceptance criteria permit.** Most criteria are directly writable as tests. UI work is verified by scripted demos instead.
-- **Small batches.** No task over ~4 hours. Commit per task with `M#-T#: <title>`.
+- **Small batches.** Tasks target ≤4h of effort (sizes S/M); L (4–8h) is the hard ceiling and requires explicit justification — otherwise split or spike. Commit per task with `M#-T#: <title>`.
 - **YAGNI until backlog.** Good ideas go to the Parking Lot (§9), not into the current milestone.
 
 ---
@@ -138,7 +138,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | M1-T1 | Persona registry + Ollama client (model load with context target + temperature per persona) | M | code | Each configured persona loads its model; requests honor persona temperature/context; unreachable Ollama fails loudly | §12 |
 | M1-T2 | Context feasibility check honoring context floors (recommend-or-escalate path; no silent reduction) | M | code | Hardware below floor → job pauses with recommendation logged, never truncates silently | §12.3 |
 | M1-T3 | Prompt assembly v1: deterministic order for the subset that exists (system, project/task context, criteria, phase instructions) with per-section token accounting | M | code | Same inputs → byte-identical prompt; token counts logged to EventLog | §11 |
-| M1-T4 | Job state machine skeleton: queued → context_building → planning → diverging (single candidate) → synthesizing → comparing → completed; state persisted after every transition | L | code | Kill -9 at any point mid-job → restart resumes from last committed state; illegal transitions rejected by tests | §8 |
+| M1-T4 | Job state machine skeleton: queued → context_building → planning → diverging (single candidate) → synthesizing → comparing → completed; state persisted after every transition. Note: `evaluating`/`reflecting` edges arrive with Job Pods in M3-T1 — §8.2's mandatory `diverging → evaluating` edge applies from M3 onward | L | code | Kill -9 at any point mid-job → restart resumes from last committed state; illegal transitions rejected by tests | §8 |
 | M1-T5 | Artifact store: create draft artifacts, version them, list per project | M | code | Draft artifacts persisted with type/version/status; visible via CLI listing | §9 |
 | M1-T6 | Kill switch (CLI flag + endpoint) freezing all new work | S | code | Frozen state survives restart; unfreeze requires explicit command (logged) | §22 |
 | M1-T7 | Minimal CLI: create project, submit goal, stream job progress | M | code | Fresh clone → running daemon → submitted goal → draft artifact on disk, in under 5 minutes of user time | — |
@@ -204,9 +204,9 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | M5-T2 | Division engine: chunk store + `DormantIndex` entries (chunk ID, 1-line summary via `wide`, path/line-range metadata) | L | code | Reassembly of any divided file is byte-identical (property test); index queryable | §10.1 |
 | M5-T3 | `context_swap` tool + active/dormant flush cycle | M | code | Swap loads requested chunk byte-for-byte and flushes prior active chunk intact; unit + integration tests | §25 |
 | M5-T4 | KV-cache monitoring: pre-call token counting, 85%/95% triggers, context-floor violation → pause + recommend | M | code | Simulated pressure tests trigger correct action at each threshold; floor breach never silently truncates | §10.4 |
-| M5-T5 | Context assembly priority queue (tiers 1–7) with bottom-up eviction | M | code | Overflow evicts tiers 7→6→5 only; tiers 1–3 never evicted (unit-tested) | §10.5 |
+| M5-T5 | Context assembly priority queue (tiers 1–7) with strict bottom-up eviction | M | code | Overflow evicts tiers 7→6→5→4 only; tiers 1–3 never evicted (unit-tested) | §10.5 |
 | M5-T6 | Temp 0.0 compaction jobs: deterministic (logs/test output) and semantic (conversations/docs), all `security` persona | M | code | Compaction determinism test: same input → same output across runs; temp asserted 0.0 | §10.3 |
-| M5-T7 | `query_memory`: hybrid FTS5 + sqlite-vec retrieval over compacted memory and dormant chunks | M | code | Combined BM25+vector results returned with scores; respects sqlite-vec connection-affinity constraint from task-000 | §18.3, docs/sqlite-setup |
+| M5-T7 | `query_memory`: hybrid FTS5 + sqlite-vec retrieval over compacted memory and dormant chunks | M | code | Combined BM25+vector results returned with scores; respects sqlite-vec connection-affinity constraint from task-000 | §18.3, §25, docs/sqlite-setup |
 | M5-T8 | Repository indexing pipeline (`wide` persona): embed files, update vector store, refresh Dormant Index summaries | M | code | Incremental indexing of a mid-size repo completes; new files indexed without full rescan | §17 |
 
 **Gate G5:** Byte-for-byte swap test green; compaction determinism test green; assembly-priority unit tests green.
@@ -240,7 +240,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | ID | Task | Size | Type | Acceptance Criteria | Refs |
 |---|---|---|---|---|---|
 | M7-T1 | Power/idle integration: wire `internal/power` profiles (rename VM-era terms to pods), AC/battery gating, sleep→flush+pause, wake→resume-from-checkpoint | M | code | Sleep/wake cycle mid-job resumes correctly; battery below threshold pauses with state flushed | §24 |
-| M7-T2 | Daydreaming engine: five actions (§17.1) with constraints (priority yield, budgets, draft-only output, no battery) + `DaydreamLog` | L | code | Daydream job yields within seconds when real work arrives; outputs all draft; log persisted per session | §17 |
+| M7-T2 | Daydreaming engine: all six actions (§17.1, including Strategy Mining, which depends on the records produced by M6-T10/T11) with constraints (priority yield, budgets, draft-only output, no battery) + `DaydreamLog` | L | code | Daydream job yields within seconds when real work arrives; outputs all draft; log persisted per session | §17 |
 | M7-T3 | Alarms: categories and levels per §22.3, wired to their triggers (loop, resource, quality >50%, stuck, hallucination, budget, security, drift, self-modification) | M | code | Each alarm category has a triggered test; critical alarms freeze the system | §22 |
 | M7-T4 | Backups: scheduled local backups, retention, restore drill documented and tested | S | code | Restore from backup produces working state; retention prunes correctly | §23.4 |
 | M7-T5 | `athanor doctor`: full check list incl. context-feasibility and model availability with remediation suggestions | M | code | Doctor catches each seeded fault (no podman, no ollama, missing model, low RAM) with actionable output | §30.2 |
@@ -286,7 +286,7 @@ Post-M7 capability. Listed so ideas have a home without derailing the current mi
 - **Trunk-based development**, short-lived branches, merged when green.
 - **Spikes are timeboxed** and must end in an ADR or a written finding — never silent abandonment.
 - **Plan reviews** at milestone boundaries: update Status table, re-estimate remaining work honestly, prune tasks that reality made irrelevant.
-- **No task over ~4 hours of estimated effort.** Split or spike anything larger.
+- **Task effort targets ≤4h (S/M); L (4–8h) is the hard ceiling** (see §5 sizes). Split or spike anything that would exceed it.
 - **Security suites never skip CI.** A red security test blocks merge regardless of urgency.
 
 ---

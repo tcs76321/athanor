@@ -466,7 +466,7 @@ When building a prompt for a new job or phase, the MCE fills the available KV ca
 6. **Dormant Index** (metadata only: chunk ID, 1-line summary, file path, line range)
 7. **Evaluation Instructions & Strategy Notes** (phase-specific instructions: divergence, evaluation, reflection, synthesis; short lines from active StrategyInsights per §13.4)
 
-If the assembled context exceeds the hardware limit, tiers are evicted from the bottom (7 → 6 → 5) before any full-fidelity content (tiers 1–3) is touched.
+If the assembled context exceeds the hardware limit, tiers are evicted strictly bottom-up (7 → 6 → 5 → 4) before any full-fidelity content (tiers 1–3) is touched.
 
 ---
 
@@ -1552,6 +1552,7 @@ logging:
     - podman
     - inference
     - feedback
+    - strategy
     - context
     - daydream
     - power

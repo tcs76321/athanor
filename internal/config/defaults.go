@@ -52,7 +52,7 @@ func applyDefaults(c *Config) {
 	if c.Power.BatteryPauseThresholdPercent == 0 {
 		c.Power.BatteryPauseThresholdPercent = 20
 	}
-	setDur(&c.Power.IdleResumeAfter, Duration(5 * minute))
+	setDur(&c.Power.IdleResumeAfter, Duration(5*minute))
 	setTrue(&c.Power.PauseOnSleep)
 	setTrue(&c.Power.ResumeOnWake)
 	setTrue(&c.Power.DaydreamOnIdle)

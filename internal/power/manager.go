@@ -54,10 +54,10 @@ func (n *NoopWatcher) ReleasePowerAssertion() error {
 
 // PowerManager manages power profiles and resource limits.
 type PowerManager struct {
-	mu            sync.RWMutex
-	watcher       OSWatcher
+	mu             sync.RWMutex
+	watcher        OSWatcher
 	currentProfile Profile
-	limits        Limits
+	limits         Limits
 }
 
 // NewPowerManager creates a new PowerManager with the given OSWatcher.

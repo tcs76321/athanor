@@ -1,0 +1,295 @@
+# Athanor — Development Roadmap
+
+**Status**: Living document | **Canonical design**: [ARCHITECTURE.md](ARCHITECTURE.md) | **Philosophy**: Vertical slices, each runnable, each demoable, each safe.
+
+---
+
+## Status
+
+| Milestone | State |
+|---|---|
+| TASK-000 SQLite + sqlite-vec spike | ✅ Done (findings: [docs/sqlite-setup.md](docs/sqlite-setup.md)) |
+| Power manager draft (`internal/power`) | 🚧 Drafted; VM-era naming to be corrected at M7-T1 |
+| M0 Foundations | ⬜ Not started |
+| M1 Walking Skeleton | ⬜ Not started |
+| M2 Container Spine | ⬜ Not started |
+| M3 Dialectical Loop v1 | ⬜ Not started |
+| M4 Airlock & Gateway | ⬜ Not started |
+| M5 Context Engine v1 | ⬜ Not started |
+| M6 Autonomy & Feedback | ⬜ Not started |
+| M7 Endurance & Release | ⬜ Not started |
+
+Update this table as milestones progress. It is the honest heartbeat of the project.
+
+---
+
+## How to Use This Document
+
+This roadmap defines **what must be true** after each milestone and **what may never be compromised**. It deliberately does not define **how** things are implemented. Implementation details emerge during development and are captured as Architecture Decision Records.
+
+- **Tasks are hypotheses, not contracts.** If development reveals a better structure, change the approach — then update this file and write an ADR.
+- **No task specifies internal APIs, schemas, or function names.** Acceptance criteria describe observable behavior only.
+- **Spikes are first-class.** Anything with genuine uncertainty gets a timeboxed spike with an explicit hypothesis before it gets a build task.
+- **Deviations are cheap; drift is expensive.** Changing the plan costs one ADR paragraph. Silently diverging from it costs the truth of the whole document.
+- **ADRs** live in `docs/adr/NNNN-title.md` (short: context → decision → consequences). Any choice that future-you would ask "why did they do *that*?" deserves one.
+
+### Change Policy
+
+1. Modify tasks freely within a milestone; keep acceptance criteria verifiable.
+2. Adding a milestone or reordering requires updating the Security Gates table (§3).
+3. Never weaken an Invariant (§4) to make a task easier. Weaken the task instead.
+
+---
+
+## 1. Guiding Principles
+
+- **Walking skeleton first.** A thin end-to-end slice (M1) beats thick horizontal layers. Integration risk is retired early, not discovered late.
+- **Vertical slices over horizontal phases.** Each milestone delivers user-visible capability, not just infrastructure.
+- **Risk-first.** The three biggest unknowns — rootless Podman ergonomics, Dialectical loop quality on local models, AST/structural division — get spikes before the milestones that depend on them.
+- **Containment precedes capability.** No autonomous behavior is added before the guardrail that bounds it exists.
+- **Spike → harden → automate.** Prove feasibility by hand, implement properly, lock in with tests.
+- **TDD where acceptance criteria permit.** Most criteria are directly writable as tests. UI work is verified by scripted demos instead.
+- **Small batches.** No task over ~4 hours. Commit per task with `M#-T#: <title>`.
+- **YAGNI until backlog.** Good ideas go to the Parking Lot (§9), not into the current milestone.
+
+---
+
+## 2. Relationship to ARCHITECTURE.md
+
+ARCHITECTURE.md is canonical for **design truth**; this roadmap is authoritative for **build order and scope**. Each task carries `Refs:` pointing at ARCHITECTURE sections. Where they appear to conflict, ARCHITECTURE wins for behavior, and the discrepancy is filed as a doc bug to fix both files.
+
+---
+
+## 3. Security Gates (By Construction)
+
+Each milestone ends with a gate. The next milestone does not begin until the gate passes. This sequencing makes unsafe shortcuts structurally impossible rather than a matter of discipline.
+
+| Gate | After | Rule that becomes enforceable |
+|---|---|---|
+| G0 | M0 | All state survives restart; migrations are forward-only and idempotent |
+| G1 | M1 | No tool execution exists at all — the agent is provably contained to LLM + storage |
+| G2 | M2 | No code executes outside a hardened Job Pod; pods have no network, no Podman socket, no host FS beyond approved mounts |
+| G3 | M3 | No artifact is accepted without passing deterministic evaluation and comparison |
+| G4 | M4 | No byte enters or leaves the workspace without airlock scanning; no egress except via the Gateway allowlist |
+| G5 | M5 | No compaction runs above Temp 0.0; dormant chunk swaps are byte-for-byte exact |
+| G6 | M6 | No external or irreversible action without HITL approval; every rejection yields a CorrectionRecord |
+| G7 | M7 | System survives sleep, power loss, and 24h soak with no state loss |
+
+**Standing rule:** the kill switch must exist and work from M1 onward, before any capability that could need stopping.
+
+---
+
+## 4. Invariants (The Mountains)
+
+These are non-negotiable at every milestone. They are drawn from ARCHITECTURE.md and repeated here because roadmaps are where they go to die if not restated.
+
+1. **Isolation rules** (§3.1): Job Pods talk only to the Core internal API with a per-job token; never to Ollama, the internet, the Podman socket, SQLite, each other, or credentials.
+2. **Deterministic judgment:** evaluation and comparison always run on the `security` persona at Temperature 0.0. Generation explores; judgment does not.
+3. **All compaction at Temp 0.0.** Critical context is divided losslessly, never summarized away.
+4. **Persist at every transition.** Job state is serialized to SQLite after every state-machine transition, atomically. Crash recovery resumes from the last commit.
+5. **HITL for external/irreversible.** Contained + reversible = proceed; external + irreversible = approval required.
+6. **Git as undo.** Code changes are atomic commits on agent-created branches. Push is always HITL-gated.
+7. **Context floors are floors.** Never silently reduce effective context below the task minimum; recommend model changes instead.
+8. **Daydreaming output is always draft**, cannot commit, cannot modify accepted artifacts, and is disabled on battery.
+
+---
+
+## 5. Milestone Graph
+
+```
+M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 ──► M6 ──► M7
+       │      │             │
+       │      │             └── M4 can start once M3's evaluation phase
+       │      │                 exists (gateway needed by research tasks)
+       │      └── M2 spike may run in parallel with late M1
+       └── docs/adr/ created at M0
+```
+
+Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤ 2h, **M** 2–4h, **L** 4–8h. If a task overruns its size significantly, stop and split it or spike it.
+
+---
+
+## 6. Milestones
+
+### M0 — Foundations
+
+**Objective:** A runnable daemon skeleton with honest configuration, structured logging, and durable state — the substrate everything else stands on. Reuses task-000 findings (`mattn/go-sqlite3`, FTS5 build tag, sqlite-vec connection affinity).
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M0-T1 | Go module + project layout (`cmd/`, `internal/{config,store,power,...}`, `migrations/`) | S | code | `go build ./...` succeeds from clean clone | §2 |
+| M0-T2 | Config loader + validation for `config.yaml` (defaults for optional, reject invalid) | M | code | Malformed, empty, missing-file, and wrong-type configs each produce specific errors; valid config loads with defaults applied | §29 |
+| M0-T3 | Structured logging (slog → `state/logs/`, category-tagged JSON) | S | code | Categories per ARCHITECTURE §28 emit distinct events; rotation works | §28 |
+| M0-T4 | Store layer: WAL pragmas, embedded forward-only migration runner, backup-before-migrate | M | code | Interrupted migration leaves prior version intact; rerun is a no-op | §23 |
+| M0-T5 | Schema v1 migrations: projects, goals, tasks, jobs, actions, artifacts, events, corrections, hitl_requests, prompt_templates, personas | M | code | Schema inspectable via `sqlite3`; FK constraints enforced; `updated_at` triggers present | §5, §23 |
+| M0-T6 | EventLog append API (append-only) | S | code | Concurrent writers serialize; no update/delete paths exist | §28 |
+| M0-T7 | Health endpoint `/healthz` | S | code | Returns status, version, uptime | — |
+| M0-T8 | CI bootstrap: vet, test -race, lint on every push | S | infra | CI red on injected failure; green on clean tree | — |
+
+**Gate G0:** `go test ./...` green; kill -9 during migration leaves usable DB; config errors are actionable.
+
+### M1 — Walking Skeleton
+
+**Objective:** One thin, fully contained vertical slice: a goal goes in, an LLM-generated draft artifact comes out, and it survives a crash. **No tools exist yet** — the agent can only think and persist. This proves the spine (state machine, prompt assembly, personas, persistence, kill switch) before any capability adds risk.
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M1-T1 | Persona registry + Ollama client (model load with context target + temperature per persona) | M | code | Each configured persona loads its model; requests honor persona temperature/context; unreachable Ollama fails loudly | §12 |
+| M1-T2 | Context feasibility check honoring context floors (recommend-or-escalate path; no silent reduction) | M | code | Hardware below floor → job pauses with recommendation logged, never truncates silently | §12.3 |
+| M1-T3 | Prompt assembly v1: deterministic order for the subset that exists (system, project/task context, criteria, phase instructions) with per-section token accounting | M | code | Same inputs → byte-identical prompt; token counts logged to EventLog | §11 |
+| M1-T4 | Job state machine skeleton: queued → context_building → planning → diverging (single candidate) → synthesizing → comparing → completed; state persisted after every transition | L | code | Kill -9 at any point mid-job → restart resumes from last committed state; illegal transitions rejected by tests | §8 |
+| M1-T5 | Artifact store: create draft artifacts, version them, list per project | M | code | Draft artifacts persisted with type/version/status; visible via CLI listing | §9 |
+| M1-T6 | Kill switch (CLI flag + endpoint) freezing all new work | S | code | Frozen state survives restart; unfreeze requires explicit command (logged) | §22 |
+| M1-T7 | Minimal CLI: create project, submit goal, stream job progress | M | code | Fresh clone → running daemon → submitted goal → draft artifact on disk, in under 5 minutes of user time | — |
+| M1-T8 | Quality probe (spike): run 5 sample goals across text/code/document archetypes; record qualitative findings | S | spike | Findings note in `docs/` with hypothesis → observation → implication format; informs M3 prompts | §13 |
+
+**Gate G1:** Demo script passes end-to-end; crash-recovery test green; grep-level proof that no tool execution path exists.
+
+### M2 — Container Spine
+
+**Objective:** Untrusted code runs only inside ephemeral, hardened rootless Podman Job Pods that talk exclusively to the Core internal API. The Core itself still runs as a host binary during development (packaging is M7).
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M2-T1 | **Spike** (timebox 4h): rootless Podman lifecycle on dev machines — create/run/teardown a container with hardening flags, mounts, and internal-only networking. Hypothesis: flags in §21.2 behave equivalently on Linux and macOS/podman-machine | S | spike | ADR records what worked, what didn't, and the chosen invocation strategy; findings gate M2-T2 design | §21 |
+| M2-T2 | Job Pod manager: full lifecycle (create, start, supervise, teardown) with hardening flags | L | code | Every pod created with read-only rootfs, cap-drop all, no-new-privileges, seccomp profile, resource limits, network=none/default | §21.2 |
+| M2-T3 | Per-job tokens issued at pod creation, delivered via tmpfs mount, validated on every internal API call, revoked at teardown | M | code | Expired/wrong-job/absent tokens rejected; token never appears in env or argv | §3.2 |
+| M2-T4 | Internal API: `execute_code`, `run_tests` enforcing each job's tool allowlist | M | code | Disallowed tools rejected and logged; results streamed back with exit codes/output | §25 |
+| M2-T5 | Strict teardown + orphan cleanup (startup sweep kills stray pods) | M | code | After normal run, crash, and kill -9: zero surviving pods (integration test verifies) | §31.2 |
+| M2-T6 | Security test suite: pod→internet denied, pod→Ollama denied, pod→podman.sock denied, pod→host FS denied, credential absence verified | M | test | All attempts fail from inside the pod; failures logged as security events | §21 |
+
+**Gate G2:** Security suite green on both Linux and macOS; a pytest suite runs inside a pod and returns results.
+
+### M3 — Dialectical Loop v1
+
+**Objective:** The product's heart: multi-candidate generation, deterministic evaluation, comparison-before-acceptance — with budgets, retries, and checkpoint recovery. Context handling is deliberately naive here (assemble within floors); the MCE arrives in M5.
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M3-T1 | Full phase executor: planning, diverging (N candidates), evaluating (incl. `running_tests` sub-state), reflecting branch logic, synthesizing, comparing | L | code | State machine in §8 implemented exactly; every transition persisted; unit tests cover all legal/illegal edges | §8, §13 |
+| M3-T2 | Evaluation phase: acceptance-criteria checks, linter runs, test runs in Job Pod; `EvaluationRecord` persistence | L | code | Records capture pass/fail, missing criteria, scores; evaluation always `security` persona Temp 0.0 (asserted in tests) | §19 |
+| M3-T3 | Comparison phase: winner determination (`new\|previous\|none`) with confidence + reasons; artifact status flow enforced | M | code | Comparison rule (§19.3) implemented as a pure function over EvaluationRecords; fully unit-tested | §9, §19 |
+| M3-T4 | Budgets & retries: per-phase wall-time budgets, max candidates, recovery counters, budget-exhaustion escalation | M | code | Exceeded budgets pause/escalate per policy; counters survive restart | §29 |
+| M3-T5 | Git tool: local branch + atomic commit on artifact acceptance (push permanently denied until M6 HITL) | M | code | Commits land on agent-created branches; working tree clean after commit; push attempt blocked and alarmed | §14, §22 |
+| M3-T6 | Crash-recovery E2E: kill Core mid-diverging / mid-evaluating / mid-testing → resume correctly; partial artifacts quarantined or draft | M | test | E2E test automates kill-and-resume at each phase; no state loss | §23.6 |
+| M3-T7 | Quality probe #2: dialectical loop vs single-shot on ~10 tasks; document whether multi-candidate + comparison actually wins on local models | S | spike | Honest findings note in `docs/`; if the loop underperforms, an ADR proposes prompt/rubric changes before M6 builds on it | §13 |
+
+**Gate G3:** E2E demo — code-project goal → single task → 3 candidates → tests in pod → comparison → accepted commit, no user intervention; recovery test green.
+
+### M4 — Airlock & Gateway
+
+**Objective:** Files and network become available — but only through scanning and allowlisting. This unlocks the research workflow *safely* and makes real file work possible for code projects.
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M4-T1 | Path containment library (symlink escape, traversal, device/setuid rejection) used by every file operation | M | code | Property-based tests over adversarial path corpus all rejected; `O_NOFOLLOW` semantics on opens | §21.3 |
+| M4-T2 | Ingress pipeline: `inbox/` → validate → scan → workspace or `quarantine/` | M | code | Clean files land; suspicious files quarantined with reason; originals untouched | §21.3 |
+| M4-T3 | Scanner integrations: ClamAV adapter (optional at runtime), YARA rule loading, prompt-injection heuristics + `security`-persona classification | M | code | Injection corpus test set detected; scanner absence degrades to quarantine-on-uncertainty, never silent pass | §21.3–§21.4 |
+| M4-T4 | Egress pipeline: validate `output/`, reject symlinks/devices/setuid/unexpected executables, scan before export | M | code | Egress of a poisoned tree fails closed; clean export works | §21.3 |
+| M4-T5 | Gateway: domain allowlist (default deny), rate limiting, header sanitization, response size caps, full request logging | M | code | Non-allowlisted domains get 403 + network event; cookies/auth stripped; oversize responses truncated+flagged | §21.5 |
+| M4-T6 | Reader Mode extraction (fetch → readability → sanitize → markdown) | M | code | JS-heavy pages return readable markdown, zero script content survives sanitization | §21.5 |
+| M4-T7 | Tools behind the Gateway: `fetch_url`, `search_web` | M | code | Tools unreachable except via gateway; allowlist enforcement proven by test | §25 |
+| M4-T8 | Adversarial security suite: traversal payloads, zip bombs, injection corpus, SSRF attempts against gateway | M | test | All attacks fail closed; events logged under `airlock`/`network` categories | §31.3 |
+
+**Gate G4:** Adversarial suite green; a research goal completes end-to-end using only allowlisted domains.
+
+### M5 — Context Engine (MCE) v1
+
+**Objective:** Full-fidelity memory becomes real: lossless division, the Dormant Index, byte-exact swapping, KV-cache pressure triggers, and Temp 0.0 compaction. This is what makes long sessions possible without corruption.
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M5-T1 | **Spike** (timebox 4h): division strategies — tree-sitter bindings vs pure-Go parsing vs header-based splitting; verify byte-for-byte reassembly property on real repos; choose via ADR | M | spike | ADR with benchmarks and a round-trip property test on ≥3 languages; decision recorded before engine work | §10.1 |
+| M5-T2 | Division engine: chunk store + `DormantIndex` entries (chunk ID, 1-line summary via `wide`, path/line-range metadata) | L | code | Reassembly of any divided file is byte-identical (property test); index queryable | §10.1 |
+| M5-T3 | `context_swap` tool + active/dormant flush cycle | M | code | Swap loads requested chunk byte-for-byte and flushes prior active chunk intact; unit + integration tests | §25 |
+| M5-T4 | KV-cache monitoring: pre-call token counting, 85%/95% triggers, context-floor violation → pause + recommend | M | code | Simulated pressure tests trigger correct action at each threshold; floor breach never silently truncates | §10.4 |
+| M5-T5 | Context assembly priority queue (tiers 1–7) with bottom-up eviction | M | code | Overflow evicts tiers 7→6→5 only; tiers 1–3 never evicted (unit-tested) | §10.5 |
+| M5-T6 | Temp 0.0 compaction jobs: deterministic (logs/test output) and semantic (conversations/docs), all `security` persona | M | code | Compaction determinism test: same input → same output across runs; temp asserted 0.0 | §10.3 |
+| M5-T7 | `query_memory`: hybrid FTS5 + sqlite-vec retrieval over compacted memory and dormant chunks | M | code | Combined BM25+vector results returned with scores; respects sqlite-vec connection-affinity constraint from task-000 | §18.3, docs/sqlite-setup |
+| M5-T8 | Repository indexing pipeline (`wide` persona): embed files, update vector store, refresh Dormant Index summaries | M | code | Incremental indexing of a mid-size repo completes; new files indexed without full rescan | §17 |
+
+**Gate G5:** Byte-for-byte swap test green; compaction determinism test green; assembly-priority unit tests green.
+
+### M6 — Autonomy & Feedback
+
+**Objective:** The system becomes genuinely agentic: goals decompose into DAGs, failures recover per policy, humans gate the external, and every rejection makes the next job better.
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M6-T1 | DAG decomposition (`tall` persona): phases, leaf tasks with criteria, dependency edges, validation (cycles, coverage, budget feasibility) | L | code | Generated DAGs pass validation or are rejected with reason; decomposition failure retries with simpler strategy per policy | §7 |
+| M6-T2 | Dependency scheduler: execute ready tasks in order; propagate `blocked` to descendants | M | code | Diamond dependencies execute correctly; blocked propagation verified by tests | §7.2 |
+| M6-T3 | Failure policies: max-retry blocking, alternative-persona re-decomposition, budget escalation to HITL | M | code | Each row of §7.2 table has an automated scenario test | §7.2 |
+| M6-T4 | HITL request queue: request types, severity, expiry, approve/reject/modify/defer; pauses and resumes jobs | M | code | Paused job resumes exactly on approval; expiry denies by default; decisions logged | §20 |
+| M6-T5 | `git_push` gated behind HITL approval | S | code | Push attempt creates approval request; denied push leaves remote untouched | §25 |
+| M6-T6 | CorrectionRecords: captured from rejections, test failures, security scans, loops, hallucinated paths; mandatory structured rejection form fields | M | code | Every rejection yields a well-formed record; sources listed in §18.1 each produce records | §18 |
+| M6-T7 | Feedback injection into prompt assembly: vector-similarity retrieval, severity/scope ordering, mute/edit/promote via API | M | code | High-severity project corrections outrank others; injection positions logged with token accounting | §11, §18.3 |
+| M6-T8 | Web UI v1: dashboard (jobs, approvals, alarms, power), projects CRUD, approvals queue, watch view (SSE token stream, phase tree, tool log, interruption queue) | L | code | Watch view shows live phase transitions for a running job; interruption note appears at next safe point, never mid-token | §20, §27 |
+| M6-T9 | Feedback-loop E2E: reject artifact with structured reason → CorrectionRecord created → injected into next job → mistake avoided | M | test | Automated E2E asserts the correction's derived rule appears in the next prompt and behavior changes | §31.4 |
+
+**Gate G6:** HITL gates every external/irreversible action (proven by attempting each type); feedback-loop E2E green; multi-task DAG demo passes unattended.
+
+### M7 — Endurance & Release
+
+**Objective:** The furnace burns unattended: power-aware, daydreaming, backed up, doctor-validated, packaged, and soak-tested. This milestone turns a demo into a system.
+
+| ID | Task | Size | Type | Acceptance Criteria | Refs |
+|---|---|---|---|---|---|
+| M7-T1 | Power/idle integration: wire `internal/power` profiles (rename VM-era terms to pods), AC/battery gating, sleep→flush+pause, wake→resume-from-checkpoint | M | code | Sleep/wake cycle mid-job resumes correctly; battery below threshold pauses with state flushed | §24 |
+| M7-T2 | Daydreaming engine: five actions (§17.1) with constraints (priority yield, budgets, draft-only output, no battery) + `DaydreamLog` | L | code | Daydream job yields within seconds when real work arrives; outputs all draft; log persisted per session | §17 |
+| M7-T3 | Alarms: categories and levels per §22.3, wired to their triggers (loop, resource, quality >50%, stuck, hallucination, budget, security, drift, self-modification) | M | code | Each alarm category has a triggered test; critical alarms freeze the system | §22 |
+| M7-T4 | Backups: scheduled local backups, retention, restore drill documented and tested | S | code | Restore from backup produces working state; retention prunes correctly | §23.4 |
+| M7-T5 | `athanor doctor`: full check list incl. context-feasibility and model availability with remediation suggestions | M | code | Doctor catches each seeded fault (no podman, no ollama, missing model, low RAM) with actionable output | §30.2 |
+| M7-T6 | Morning Digest: async overnight summary (completed DAGs, artifacts, failures, pending approvals, daydream output, token usage) | M | code | Digest generated after simulated overnight run matches activity records | §27.2 |
+| M7-T7 | Packaging: Core Pod OCI image, Job Pod base image(s), single-binary CLI install flow | L | infra | Fresh machine → install → doctor passes → first artifact, without manual steps beyond prerequisites | §32 |
+| M7-T8 | Headless mode: systemd/launchd units, UI via SSH port forwarding | S | infra | Headless boot on clean Linux VM serves UI through forwarded port | §32 |
+| M7-T9 | 24h soak: mixed workload + idle periods on AC power; memory/goroutine leak checks; WAL growth bounded | M | test | Zero leaks, zero unrecovered crashes, disk usage stable | — |
+| M7-T10 | Docs pass: README quickstart verified against reality; ARCHITECTURE/ROADMAP discrepancies fixed | S | doc | A newcomer follows the README successfully; no doc/behavior conflicts remain | — |
+
+**Gate G7 (release):** Soak clean · fresh-install demo < 15 minutes · security audit checklist from §31.3 signed off · all gates G0–G6 still passing.
+
+---
+
+## 7. Deliberately Deferred (Backlog)
+
+Post-M7 capability. Listed so ideas have a home without derailing the current milestone.
+
+| Item | Notes |
+|---|---|
+| Browser Mode | Isolated pod + proxied gateway; HITL-gated. Needs real demand before building. |
+| Cloud inference mediation | Credential broker path for approved outbound calls. Design exists (§21.7); wait for need. |
+| Skills runtime | Python skill objects, OCI packaging, permission declarations, scanner integration (§26). |
+| Exploration Paths | User-definable prompt/temperature sequences (§13.2). Requires stable loop quality first (see M3-T7). |
+| Media/data archetype depth | Toolchains, render commands, dataset validation. Text/code/document archetypes carry MVP. |
+| Full Statistics / Memory Browser views | Retrieval test tool, compaction layer viewer, usage dashboards (§27). |
+| Host Adapter polish | System tray states, fsnotify-driven proactive triggers. Minimal version only in M7. |
+| Recurring/triggered task types | Cron and event-triggered tasks after one-time tasks prove the scheduler. |
+
+---
+
+## 8. Process
+
+### Definition of Done (per task)
+
+- [ ] Acceptance criteria demonstrably met (test or scripted demo)
+- [ ] Tests written where criteria are automatable; suite green (`go vet`, `go test -race ./...`, lint)
+- [ ] No new invariant violations (§4)
+- [ ] Committed as `M#-T#: <title>`; ROADMAP status updated if milestone-level
+- [ ] If a design decision was made → ADR written
+
+### Working agreements
+
+- **Trunk-based development**, short-lived branches, merged when green.
+- **Spikes are timeboxed** and must end in an ADR or a written finding — never silent abandonment.
+- **Plan reviews** at milestone boundaries: update Status table, re-estimate remaining work honestly, prune tasks that reality made irrelevant.
+- **No task over ~4 hours of estimated effort.** Split or spike anything larger.
+- **Security suites never skip CI.** A red security test blocks merge regardless of urgency.
+
+---
+
+## 9. Notes for Implementers
+
+1. **Start at M0-T1; follow the graph.** Parallelize only where §5 allows.
+2. **The acceptance criteria are the test spec.** Write the test first when the criterion is automatable; write the demo script first when it isn't.
+3. **When reality disagrees with the plan, believe reality.** Change the plan, write the ADR, move on. The roadmap serves the system, not vice versa.
+4. **Quality probes (M1-T8, M3-T7) exist because local-model behavior is the biggest empirical unknown.** Take their findings seriously before compounding capability on top.
+5. **Containment is a feature you ship, not a phase you pass.** Gates G0–G7 stay enforced after they're earned — regression in any gate re-blocks release.

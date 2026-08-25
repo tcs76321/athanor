@@ -105,7 +105,7 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-Pre-MVP. Completed so far: task-000 SQLite/sqlite-vec Go spike and a power-management draft. The implementation roadmap lives in [`WORKPLAN.md`](WORKPLAN.md).
+Pre-MVP. Completed so far: task-000 SQLite/sqlite-vec Go spike and a power-management draft. The implementation plan lives in [`ROADMAP.md`](ROADMAP.md).
 
 ## Documentation
 

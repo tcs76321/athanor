@@ -464,7 +464,7 @@ When building a prompt for a new job or phase, the MCE fills the available KV ca
 4. **Relevant `CorrectionRecord`s** (Temp 0.0 compacted, injected by vector similarity to task)
 5. **Episodic Context** (Temp 0.0 compacted, summaries of past jobs in this project)
 6. **Dormant Index** (metadata only: chunk ID, 1-line summary, file path, line range)
-7. **Evaluation Instructions** (phase-specific: divergence, evaluation, reflection, synthesis)
+7. **Evaluation Instructions & Strategy Notes** (phase-specific instructions: divergence, evaluation, reflection, synthesis; short lines from active StrategyInsights per §13.4)
 
 If the assembled context exceeds the hardware limit, tiers are evicted from the bottom (7 → 6 → 5) before any full-fidelity content (tiers 1–3) is touched.
 
@@ -503,7 +503,8 @@ User prompts **cannot override** static security constraints. Meta-prompts **can
 11. User Preferences (style, format)
 12. Candidate Artifacts or Prior Outputs (if comparing)
 13. Evaluation Instructions (phase-specific)
-14. Interruption Queue Notes (user notes from live watch mode)
+14. Strategy Notes (short versioned lines derived from *active* StrategyInsights only; see §13.4)
+15. Interruption Queue Notes (user notes from live watch mode)
 ```
 
 The final prompt includes token accounting for each section, logged to the `EventLog`.
@@ -767,7 +768,7 @@ updated_at: timestamp
 1. **Persona-plan defaults.** Active insights deterministically bias default persona/temperature selection for matching tasks; every bias application is logged to the `EventLog`.
 2. **Template ranking.** Preferred prompt templates are ordered by insight evidence within each phase.
 3. **ExplorationPath proposals.** Recurring winning signatures surface as draft `ExplorationPath` proposals for user review.
-4. **Strategy notes in prompts.** A short, versioned runtime-tier line derived only from *active* insights (e.g., "on similar tasks, divergence led by `alternative` was accepted twice as often"), included in token accounting.
+4. **Strategy notes in prompts.** A short, versioned runtime-tier line derived only from *active* insights (e.g., "on similar tasks, divergence led by `alternative` was accepted twice as often"), included in token accounting (assembly position 14).
 
 **Guardrails:**
 - Insights never modify static prompts, security policy, or evaluation rubrics — attempts trip the `drift` alarm (§22.3).

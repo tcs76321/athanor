@@ -1,0 +1,164 @@
+// Semantic validation for the Athanor configuration (ARCHITECTURE §29).
+//
+// Two phases:
+//   - validateRaw runs on user-provided values BEFORE defaults resolution,
+//     so explicitly invalid values are rejected instead of silently replaced.
+//     Zero values are treated as "not provided" and skipped.
+//   - validateCross runs AFTER defaults and checks cross-field constraints.
+package config
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// validateRaw rejects explicitly invalid values before defaults are applied.
+func validateRaw(c *Config) error {
+	if c.Version != 0 && c.Version != CurrentVersion {
+		return fmt.Errorf("unsupported config version %d (want %d)", c.Version, CurrentVersion)
+	}
+	if c.Agent.ActiveHours != "" {
+		if err := checkActiveHours(c.Agent.ActiveHours); err != nil {
+			return fmt.Errorf("agent.active_hours: %w", err)
+		}
+	}
+	if t := c.Power.BatteryPauseThresholdPercent; t != 0 && (t < 0 || t > 100) {
+		return fmt.Errorf("power.battery_pause_threshold_percent must be 0-100, got %d", t)
+	}
+	if b := c.Inference.DefaultBackend; b != "" && b != "ollama" && b != "cloud" {
+		return fmt.Errorf("inference.default_backend must be \"ollama\" or \"cloud\", got %q", b)
+	}
+	for _, p := range []struct {
+		name string
+		cfg  PersonaConfig
+	}{
+		{"wide", c.Personas.Wide},
+		{"tall", c.Personas.Tall},
+		{"main", c.Personas.Main},
+		{"security", c.Personas.Security},
+		{"alternative", c.Personas.Alternative},
+	} {
+		if p.cfg.Model != "" || p.cfg.ContextTarget != 0 || p.cfg.Temperature != nil {
+			if p.cfg.Model == "" {
+				return fmt.Errorf("personas.%s.model must not be empty", p.name)
+			}
+			if p.cfg.ContextTarget != 0 && p.cfg.ContextTarget <= 0 {
+				return fmt.Errorf("personas.%s.context_target must be positive", p.name)
+			}
+			if p.cfg.Temperature != nil && (*p.cfg.Temperature < 0 || *p.cfg.Temperature > 2) {
+				return fmt.Errorf("personas.%s.temperature must be within [0, 2], got %v", p.name, *p.cfg.Temperature)
+			}
+		}
+	}
+	floors := map[string]int{
+		"context_engine.coding_floor":   c.ContextEngine.CodingFloor,
+		"context_engine.research_floor": c.ContextEngine.ResearchFloor,
+		"context_engine.document_floor": c.ContextEngine.DocumentFloor,
+		"context_engine.simple_floor":   c.ContextEngine.SimpleFloor,
+	}
+	for name, v := range floors {
+		if v != 0 && v <= 0 {
+			return fmt.Errorf("%s must be positive, got %d", name, v)
+		}
+	}
+	// Invariant §4.3: all compaction runs at Temp 0.0. Enforced here so no
+	// configuration can weaken it.
+	if t := c.ContextEngine.CompactionTemperature; t != 0 {
+		return fmt.Errorf("context_engine.compaction_temperature must be 0.0 (invariant: all compaction at Temp 0.0), got %v", t)
+	}
+	if w, k := c.ContextEngine.KVCacheWarningThresh, c.ContextEngine.KVCacheCriticalThresh; w > 1 || k > 1 || w < 0 || k < 0 {
+		return fmt.Errorf("kv_cache thresholds must be within [0, 1], got warning=%v critical=%v", w, k)
+	}
+	if j := c.Execution.JudgePersona; j != "" {
+		if _, ok := c.Personas.Role(j); !ok {
+			return fmt.Errorf("execution.judge_persona %q is not a defined persona role", j)
+		}
+	}
+	if n := c.Execution.DivergenceCandidates; n != 0 && n < 1 {
+		return fmt.Errorf("execution.divergence_candidates must be >= 1, got %d", n)
+	}
+	if v := c.Execution.MinJudgeConfidence; v != 0 && (v < 0 || v > 1) {
+		return fmt.Errorf("execution.min_judge_confidence must be within [0, 1], got %v", v)
+	}
+	switch p := c.Network.DefaultPolicy; p {
+	case "", "deny", "allow":
+	default:
+		return fmt.Errorf("network.default_policy must be \"deny\" or \"allow\", got %q", p)
+	}
+	switch lvl := c.Logging.Level; lvl {
+	case "", "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("logging.level must be debug|info|warn|error, got %q", lvl)
+	}
+	known := map[string]bool{}
+	for _, cat := range Categories {
+		known[cat] = true
+	}
+	for _, cat := range c.Logging.Categories {
+		if !known[cat] {
+			return fmt.Errorf("logging.categories: unknown category %q (see ARCHITECTURE §28.1)", cat)
+		}
+	}
+	return nil
+}
+
+// validateCross checks constraints that span fields after defaults.
+func validateCross(c *Config) error {
+	w, k := c.ContextEngine.KVCacheWarningThresh, c.ContextEngine.KVCacheCriticalThresh
+	if w <= 0 || w > 1 || k <= 0 || k > 1 {
+		return fmt.Errorf("kv_cache thresholds must be within (0, 1], got warning=%v critical=%v", w, k)
+	}
+	if w >= k {
+		return fmt.Errorf("kv_cache_warning_threshold (%v) must be below kv_cache_critical_threshold (%v)", w, k)
+	}
+	if _, ok := c.Personas.Role(c.Execution.JudgePersona); !ok {
+		return fmt.Errorf("execution.judge_persona %q is not a defined persona role", c.Execution.JudgePersona)
+	}
+	return nil
+}
+
+// checkActiveHours validates an "HH:MM-HH:MM" range such as "00:00-24:00".
+func checkActiveHours(s string) error {
+	parts := strings.SplitN(s, "-", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("%q must match HH:MM-HH:MM", s)
+	}
+	start, err := parseClock(parts[0], false)
+	if err != nil {
+		return fmt.Errorf("%q: %w", s, err)
+	}
+	end, err := parseClock(parts[1], true)
+	if err != nil {
+		return fmt.Errorf("%q: %w", s, err)
+	}
+	if end <= start {
+		return fmt.Errorf("%q: end must be after start", s)
+	}
+	return nil
+}
+
+// parseClock parses "HH:MM". allow24 admits "24:00" (end-of-day sentinel).
+func parseClock(s string, allow24 bool) (int, error) {
+	bad := fmt.Errorf("%q is not a valid HH:MM time", s)
+	fields := strings.Split(s, ":")
+	if len(fields) != 2 {
+		return 0, bad
+	}
+	hh, err1 := strconv.Atoi(fields[0])
+	mm, err2 := strconv.Atoi(fields[1])
+	if err1 != nil || err2 != nil {
+		return 0, bad
+	}
+	maxHour := 23
+	if allow24 {
+		maxHour = 24
+	}
+	if hh < 0 || hh > maxHour || mm < 0 || mm > 59 {
+		return 0, bad
+	}
+	if allow24 && hh == 24 && mm != 0 {
+		return 0, bad
+	}
+	return hh*60 + mm, nil
+}

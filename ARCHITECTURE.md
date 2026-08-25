@@ -1,19 +1,22 @@
 # Athanor — System Architecture
 
-An *athanor* is an alchemical furnace designed to burn continuously without interruption.
+An *athanor* is an alchemical furnace designed to burn continuously without interruption. Athanor is a local-first, container-native, semi-autonomous agent system designed for continuous 24/7 operation. This document is the canonical description of how it works.
 
 ---
 
 ## 1. Design Principles
 
-- **Local-first.** Everything is designed to stay local and secure. Storage, inference, etc. Cloud inference optional.
-- **Containment-based trust.** Contained + reversible = no approval. External + irreversible = approval.
-- **Ephemeral execution.** Every task runs in a fresh MicroVM, destroyed on completion.
+- **Local-first.** Storage, inference, and execution stay on your hardware by default. Cloud inference is optional, budget-gated, and requires explicit approval.
+- **Containment-based trust.** Contained + reversible = no approval needed. External + irreversible = approval required.
+- **Ephemeral execution.** Every task runs in a fresh, hardened, rootless Job Pod, destroyed on completion.
 - **Git as undo.** All code modifications are atomic commits on agent-created branches.
-- **Hardware-adaptive.** Ollama handles physical device routing (GPU/CPU). The daemon handles capacity planning (preventing OOM) and performance guarding.
-- **Agentic context floors.** Agentic work requires deep context. We enforce strict minimum context windows and downgrade models rather than cripple the context.
-- **Feedback compounds.** Rejections with reasons stored and injected into future prompts.
+- **Lossless over lossy.** Critical context is never summarized away — it is structurally divided and swapped. Compaction, when used, is deterministic (Temperature 0.0).
+- **Deterministic judgment.** Evaluation and comparison always run on the `security` persona at Temperature 0.0. Generation explores; judgment does not.
+- **Hardware-adaptive.** Ollama handles physical device routing (GPU/CPU). The Core handles capacity planning (context feasibility, OOM prevention) and performance guarding.
+- **Agentic context floors.** Agentic work fails at low context. We enforce strict minimum context windows and recommend model changes rather than cripple the context.
+- **Feedback compounds.** Rejections with structured reasons are stored as `CorrectionRecord`s and injected into future prompts.
 - **Mountains and rivers.** Security constraints never change. Prompts and strategies evolve.
+- **Project-first, not chat-first.** The primary unit of interaction is a bounded project with an archetype and acceptance criteria — not a generic chat window.
 - **Test everything.** TDD at integration scale. Security tests adversarial. Prompt regressions tracked.
 
 ---
@@ -22,323 +25,1544 @@ An *athanor* is an alchemical furnace designed to burn continuously without inte
 
 | Layer | Technology |
 |---|---|
-| Core daemon, web server, state machine, proxy, file validation | **Go** |
-| macOS VM helper | **Swift** (Virtualization.framework) |
-| Web UI | **HTML/CSS/JS** (vanilla, no framework) |
-| Persistent state | **SQLite** (+ `sqlite-vec`, FTS5) |
-| LLM inference | **Ollama** (prerequisite, REST API `localhost:11434`) |
-| Sandbox | **Firecracker** (Linux) / **Virtualization.framework** (macOS) |
-| File sharing into VMs | **virtio-fs** |
-| Web extraction | **Go `net/http` + `go-readability` + `bluemonday`** |
-| Filesystem events | **`fsnotify`** |
+| Core Pod services (state, MCE, DAG, dialectical engine, gateway, scanner, UI) | **Go** |
+| Sandbox / execution isolation | **Rootless Podman** (Core Pod + ephemeral Job Pods) |
+| Persistent state | **SQLite** (WAL, FTS5, sqlite-vec) |
+| LLM inference | **Ollama** (default backend, REST API) |
+| Web extraction | **Go `net/http` + `go-readability` + `bluemonday`** (Reader Mode) |
+| Malware / threat scanning | **ClamAV**, **YARA** (optional but recommended) |
+| Filesystem events | **`fsnotify`** (Host Adapter) |
 | System metrics | **`gopsutil`** |
+| Web UI | **HTML/CSS/JS** (vanilla, no framework) |
+
+> **Note (macOS):** Rootless Podman runs inside a VM (`podman machine`) on macOS. The Host Adapter accounts for this VM's overhead in memory budgeting, and sleep/wake coordination includes the podman machine lifecycle. See §12.3 and §30.
 
 ---
 
-## 3. Topology
+## 3. System Topology
 
-The Go daemon is the **sole router**. No component communicates peer-to-peer.
-
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Host Operating System                                        │
+│                                                              │
+│  ┌────────────────────┐                                      │
+│  │   Host Adapter     │  Minimal OS bridge                   │
+│  │  (power, sleep,    │  (tray, fsnotify, Podman lifecycle)  │
+│  │   idle, fsnotify)  │                                      │
+│  └─────────┬──────────┘                                      │
+│            │ starts/manages                                  │
+│            ▼                                                 │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │                    Core Pod (Go)                      │   │
+│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐      │   │
+│  │  │  core   │ │ gateway │ │ scanner │ │   ui    │      │   │
+│  │  │ (state, │ │ (egress,│ │ (ClamAV,│ │ (watch, │      │   │
+│  │  │  MCE,   │ │ reader, │ │  YARA,  │ │  HITL,  │      │   │
+│  │  │  DAG,   │ │ cred    │ │ airlock)│ │  dash)  │      │   │
+│  │  │ dialect)│ │ broker) │ │         │ │         │      │   │
+│  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘      │   │
+│  │       └───────────┴───────────┴───────────┘           │   │
+│  └───────────────────────────┬───────────────────────────┘   │
+│                              │                               │
+│              ┌───────────────┼───────────────┐               │
+│              ▼               ▼               ▼               │
+│        ┌──────────┐    ┌──────────┐    ┌──────────┐          │
+│        │  SQLite  │    │  Ollama  │    │  Job Pod │          │
+│        │  (WAL)   │    │ Inference│    │ Ephemeral│          │
+│        │  State   │    │ Engine   │    │ Execution│          │
+│        │  + vec   │    │          │    │          │          │
+│        └──────────┘    └──────────┘    └────┬─────┘          │
+│                                              │               │
+│                                              ▼               │
+│                                     Isolated Execution       │
+│                                     (read-only rootfs,      │
+│                                      no host net,           │
+│                                      /workspace + /tmp)     │
+└──────────────────────────────────────────────────────────────┘
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        User Device                          │
-│  ┌─────────┐    HTTP      ┌──────────────┐                  │
-│  │ Browser │◄────────────►│  Go Daemon   │                  │
-│  │(Vanilla)│   SSE/fetch  │   (Router)   │                  │
-│  └─────────┘              └──────┬───────┘                  │
-│                                  │                          │
-│        ┌─────────────────────────┼─────────────────┐        │
-│        ▼                         ▼                 ▼        │
-│   ┌─────────┐              ┌──────────┐      ┌─────────┐    │
-│   │ SQLite  │              │  Ollama  │      │ Airlock │    │
-│   │(State)  │              │  (LLM)   │      │(Files)  │    │
-│   └─────────┘              └──────────┘      └─────────┘    │
-│        ▼                         ▼                 ▼        │
-│   ┌─────────┐              ┌──────────┐      ┌─────────┐    │
-│   │  Sensor │              │ MicroVM  │      │  Egress │    │
-│   │   Bus   │              │ Manager  │      │  Proxy  │    │
-│   └─────────┘              └────┬─────┘      └────┬────┘    │
-│                                 │                 │         │
-│                                 ▼                 ▼         │
-│                          ┌─────────────┐    ┌──────────┐    │
-│                          │  Ephemeral  │    │ Internet │    │
-│                          │   MicroVM   │    │(Allowlist│    │
-│                          │(Isolated)   │    │  gated)  │    │
-│                          └─────────────┘    └──────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
 
-**Isolation rule:** The MicroVM reaches *only* the Go daemon's internal API. It cannot reach Ollama, the internet, or the host filesystem directly.
+The Core is the **sole router**. No component communicates peer-to-peer.
+
+### 3.1 Isolation Rules
+
+Job Pods may communicate **only** with:
+
+- The Core internal API (via restricted localhost socket).
+- Approved workspace volumes (read-only for inputs, read-write for `/workspace/output`).
+- Read-only skill volumes.
+
+Job Pods may **not** directly access:
+
+- Ollama or any inference endpoint.
+- The public internet.
+- The host filesystem outside approved mounts.
+- The Podman socket.
+- The Core SQLite database.
+- Other Job Pods.
+- User credentials.
+
+### 3.2 Internal API Authentication
+
+Every Job Pod receives a single-use, short-lived token scoped to its job ID at creation time. The Core internal API validates this token on every request, enforces the tool allowlist for that job, and revokes the token at teardown. Tokens are delivered via a mounted tmpfs file — never via environment variables or command-line arguments.
 
 ---
 
-## 4. Directory Layout & Configuration
+## 4. Directory Layout
 
-```
+```text
 ~/athanor/
-├── athanor.db                 # SQLite: all state
-├── config.yaml                # User-editable configuration
-├── athanor.log                # Rotating text log
-├── backups/                   # Local compressed archives
-├── quarantine/                # Security-flagged files
-└── workspace/                 # THE AIRLOCK
-    ├── inbox/                 # User uploads
-    ├── output/                # AI-generated files awaiting review
-    ├── projects/              # Git-tracked project directories
-    └── scratch/               # Ephemeral VM working space
+├── config.yaml                  # User configuration
+├── state/
+│   ├── athanor.db               # SQLite (WAL mode, FTS5, sqlite-vec)
+│   ├── logs/                    # Structured JSON logs
+│   ├── backups/                 # Auto-backups
+│   └── migrations/              # Forward-only schema migrations
+├── workspace/
+│   ├── inbox/                   # File airlock ingress
+│   ├── output/                  # File airlock egress
+│   ├── projects/                # Per-project repositories
+│   ├── scratch/                 # Temporary job working files
+│   └── quarantine/              # Suspicious/rejected files
+├── skills/                      # Python skills (OCI or directory)
+├── prompts/                     # User-editable prompt templates
+└── exports/                     # Artifact exports
 ```
 
-**`config.yaml` (Key Sections):**
+### Persistence Rules
+
+- `state/` should use a Podman-managed volume if host filesystem locking is unreliable.
+- `workspace/` must be host-visible for user inspection.
+- `inbox/` and `output/` form the file airlock boundary.
+- `quarantine/` stores rejected or suspicious files, isolated from the workspace.
+
+---
+
+## 5. Object Model
+
+| Object | Purpose |
+|---|---|
+| `Project` | Bounded context for goals, documents, preferences, tasks, artifacts, corrections |
+| `Goal` | High-level mission (20–500 chars) |
+| `Task` | Unit of work in a DAG; includes `AcceptanceCriteria` and budget |
+| `Job` | One execution instance of a task (runs the Dialectical Engine) |
+| `Action` | One tool invocation inside a job |
+| `Artifact` | Versioned output (code, document, dataset, proposal, media, evaluation) |
+| `Skill` | Reusable, versioned Python capability with declared permissions |
+| `PromptTemplate` | Versioned prompt definition (static, runtime, user, meta, skill, eval) |
+| `ContextBundle` | Selected context items for a specific job |
+| `AcceptanceCriteria` | Explicit, testable success conditions for a task |
+| `EvaluationRecord` | Deterministic judge/test output comparing artifacts |
+| `CorrectionRecord` | Structured negative feedback derived from failures |
+| `ExplorationPath` | Configured multi-step prompt/temperature sequence |
+| `HITLRequest` | Approval or user-input request with severity and expiry |
+| `EventLog` | Append-only audit trail |
+| `NetworkRule` | Egress allowlist entry |
+| `ModelPersona` | Abstract model role (wide, tall, main, security, alternative) |
+| `DormantIndex` | Table of contents for lossless context chunks available for swapping |
+| `DaydreamLog` | Record of idle-time exploration and memory consolidation |
+
+---
+
+## 6. Project Model & Archetypes
+
+### 6.1 Project Fields
+
 ```yaml
-agent: { active_hours: "08:00-23:00", idle_threshold: "30m", max_proactive_tasks_per_day: 10 }
-hardware: { vram_buffer_percent: 10, battery_pause_background: true, thermal_throttle_pause: true }
-models: { default: "gemma3:12b", filtering: "gemma3:4b", coding: "qwen2.5-coder:32b", creative: "gemma3:27b" }
-context_minimums: { coding: 32768, research: 32768, simple: 16384 } # Hard floors for agentic work
-execution_modes: { forge: { enabled: true }, whittle: { enabled: true }, harden: { enabled: false }, tend: { enabled: true } }
-theoretical_modes: { daydream: { enabled: true }, blue_sky: { enabled: true }, deep_dream: { enabled: false }, genesis: { enabled: false } }
-limits: { max_concurrent_vms: 2, max_concurrent_fetches: 5, max_concurrent_llm_calls: 1, max_tasks_per_hour: 20 }
-recovery: { max_tool_call_retries: 2, max_loop_interventions: 1, max_context_compactions: 3, max_total_recoveries: 8 }
-network: { allow_list: [github.com, arxiv.org, pypi.org], rate_limit_per_minute: 30 }
-backup: { auto: true, schedule: "0 3 * * *", max_local_backups: 10 }
+id: uuid
+name: unique-project-name
+slug: unique-project-slug
+goal: "One sentence describing the objective (20-500 chars)."
+archetype: text | code | document | data | media
+repository_path: optional
+documentation:
+  - files
+  - notes
+  - references
+acceptance_criteria:
+  - criterion
+tasks:
+  - task_ids
+preferences:
+  - project_preferences
+corrections:
+  - correction_records
+synopses:
+  - ai_generated_session_summaries
+created_at: timestamp
+updated_at: timestamp
 ```
 
----
+### 6.2 Artifact Archetypes
 
-## 5. Hardware Adaptation & Context Management
+When creating a project, the user selects an archetype. Each archetype enforces concrete constraints that the Dialectical Engine must respect.
 
-Ollama abstracts the physical hardware. It natively handles GPU vs. CPU routing, partial VRAM offloading, and quantization. **The daemon does not route inference; it manages capacity and performance.**
-
-### 5.1 Context Calculation (Capacity Planning)
-
-Ollama sets `num_ctx` at model load time. Changing it requires reloading. Calculation is **not** per-request.
-
-**Formula:**
-```
-maxContext = (available_system_memory - model_size - overhead - buffer) / kv_per_token
-```
-
-**Agentic Context Floors:**
-Agentic work (coding, RAG, multi-step reasoning) fails at low context (e.g., 4k or 8k). We enforce strict minimums defined in `context_minimums`.
-
-1. Calculate `maxContext` for the selected model.
-2. If `maxContext >= task_minimum` (e.g., 32k for coding): Load model with calculated context.
-3. If `maxContext < task_minimum`: **Do not cripple the context.** Instead, trigger a **Model Downgrade Recommendation**.
-   - *Daemon logic:* "Hardware supports `gemma3:12b` at 8k, but coding requires 32k. Recommend switching to `gemma3:4b` which supports 32k on this hardware. [Switch] [Cancel Task]"
-4. Clamp final value to the model's architectural maximum.
-
-### 5.2 Performance Guarding
-
-| Signal | Adaptation |
+| Archetype | Required Definition |
 |---|---|
-| **Ollama Latency > 3× avg** | Indicates CPU fallback or memory swapping. Notify user: "Inference is slow. Consider a smaller model." |
-| **RAM pressure >85%** | Pause background tasks. >95%: save state, pause all, notify. |
-| **Battery < 20%** | Pause all, save state, low-power mode. |
-| **Thermal throttling** | Reduce concurrent VMs to 1. Reduce LLM call frequency. |
-| **Laptop sleep** | Flush state to SQLite. Pause VMs gracefully. Resume on wake. |
+| `text` | Output format, audience, style |
+| `code` | Language, repository path, test framework, build command, run command, linters |
+| `document` | Structure, citation style, export format |
+| `data` | Schema, validation rules, source format |
+| `media` | Toolchain, output format, asset constraints, render command |
 
-### 5.3 Model Lifecycle
+Example code archetype:
 
-- **Startup:** Load default model with calculated `num_ctx`.
-- **Model change / Context recalculation:** Reload at next idle point.
-- **Idle > 30 min:** Allow Ollama to unload to free memory. Reload on next request.
+```yaml
+archetype: code
+language: python
+repo: workspace/projects/example
+test_framework: pytest
+build_command: "python -m build"
+run_command: "python -m example"
+linters:
+  - ruff
+  - mypy
+documentation_required: true
+```
 
 ---
 
-## 6. Memory Architecture
+## 7. Autonomous DAG Decomposition
 
-### 6.1 Tiers
+When a `Goal` is submitted, Athanor uses the `tall` persona to autonomously decompose it into a Directed Acyclic Graph (DAG) of `Task` objects.
 
-| Tier | Scope | Storage |
-|---|---|---|
-| Working | Current prompt + active task | Native context window |
-| Session | Conversation / active document | Auto-compacted near limit |
-| Long-term | All history, docs, code, feedback | SQLite `sqlite-vec` + FTS5 |
+### 7.1 Decomposition Workflow
 
-### 6.2 Progressive Halving Compaction
+1. Read Goal, Project Context, and Archetype constraints.
+2. Generate Task tree as a DAG:
+   - Identify logical phases (schema, implementation, tests, documentation).
+   - Create leaf tasks with explicit `AcceptanceCriteria`.
+   - Define dependency edges (e.g., `implement_api` depends on `define_schema`).
+3. Validate DAG:
+   - Check for cycles.
+   - Ensure every leaf task has at least one `AcceptanceCriteria`.
+   - Ensure budget allocation is feasible.
+4. Submit DAG to user for quick approval (optional; can be auto-approved for trusted goals).
+5. Execute tasks respecting dependency order.
 
-```
-Layer 0: Originals (always retained on disk)
-Layer 1: 2× summaries
-Layer 2: 4× summaries
-...
-Layer N: Until total ≤ 1,000,000 tokens
-```
+### 7.2 DAG Failure & Recovery Policy
 
-- **Below 1M:** Progressive halving. Retrieval prefers most detailed layer that fits.
-- **Above 1M:** Fixed windows (e.g., 220k tokens). Vector search selects relevant windows.
-- **Pinned:** Never compressed. Always injected.
-- **Compaction log:** Visible and restorable in Memory Browser.
-
----
-
-## 7. Agent Orchestration
-
-### 7.1 State Machine & Execution
-
-```go
-type Node func(ctx context.Context, s *AgentState) (*AgentState, error)
-```
-
-State serialized to SQLite after every node.
-**Flow:** Task triggered → Build 5-layer prompt → Enter state machine → Execute nodes → HITL gates → Produce artifact → Persist state.
-
-### 7.2 Constrained Tool Interface
-
-| Tool | Description |
+| Failure Type | Policy |
 |---|---|
-| `read_file(path)` / `write_file` / `list_files` / `search_files` | File ops within workspace/allowed dirs |
-| `execute_code(lang, code)` | Execute in ephemeral MicroVM |
-| `fetch_url(url)` / `search_web(query)` | Via Egress Proxy (Reader Mode) |
-| `git_operation(repo, op)` | Git operations within workspace |
-| `query_memory(query)` | Hybrid search over long-term memory |
-| `create_artifact(type, content)` | Create draft or idea artifact |
+| Leaf task fails after max retries | Mark as `blocked`. Attempt `alternative` persona re-decomposition. If still blocked, escalate to HITL. |
+| Dependency task fails | Descendant tasks are marked `blocked` until dependency is resolved or user cancels. |
+| Budget exhausted for a sub-DAG | Pause remaining tasks. Escalate to HITL for budget increase or scope reduction. |
+| DAG decomposition itself fails | Retry with `main` persona (simpler decomposition). If still fails, ask user to refine the Goal. |
 
----
+### 7.3 Task Object
 
-## 8. HITL: Containment-Based Trust
-
-**No Approval:** Read/write workspace, create git branches/commits, run tests in VM, query memory, generate proposals, self-improvement on non-security files.
-
-**Approval Required:** New domains, external data transmission, modifying files outside workspace, permanent deletion, remote git push, system package installation, modifying daemon config/security, unresolvable questions.
-
----
-
-## 9. Sandbox & Security
-
-### 9.1 Ephemeral MicroVMs
-
-One fresh VM per task. Destroyed after.
-- **Linux:** Firecracker + `jailer` (KVM, ~125ms boot).
-- **macOS:** Virtualization.framework (Swift helper, ~300ms boot).
-- **Inside VM:** Non-root, `noexec,nosuid,nodev`, seccomp. Network routes *only* to Go daemon.
-
-### 9.2 Airlock (File Isolation)
-
-1. **Daemon scope:** Ops only under workspace + allowed dirs.
-2. **Ingress:** `filepath.EvalSymlinks` → validate roots → copy content only.
-3. **Egress:** `os.Lstat` → reject symlinks/non-regular → copy content only.
-4. **Open flags:** `O_NOFOLLOW` on all workspace opens.
-5. **Periodic scan:** 30s interval. Delete outbound symlinks, setuid, devices.
-6. **VM mount:** `virtiofsd --sandbox=namespace` / `VZSharedDirectory`.
-
-### 9.3 Network & Web
-
-- **Egress Proxy:** Go HTTP proxy. Allow-list, logging, header sanitization, rate limiting.
-- **Reader Mode (Default):** `net/http` → `go-readability` → `bluemonday` → Markdown. No JS.
-- **Browser Mode (Opt-in):** Headless in MicroVM. HITL gate with warning.
-
-### 9.4 Alarms & Kill Switch
-
-- **Kill Switch:** Persistent STOP button. Kills VMs, cancels LLM/fetches, enters freeze.
-- **Alarms:** Notice, Warning, Alert (pause task), Critical (freeze daemon). Triggers: Loop, Drift (modifying Mountains), Resource, Quality (>80% rejection), Security, Stuck, Hallucination, Budget, Self-Mod.
-
----
-
-## 10. Ontology & Goal Expansion
-
-```
-Topics    ← broad interests, tag everything
-Goals     ← high-level missions, created via expansion
-Projects  ← concrete containers (repos, reports, workflows)
-Tasks     ← recurring, one-time, or triggered. Belong to Projects.
+```yaml
+id: uuid
+project_id: uuid
+parent_task_id: optional
+name: string
+description: string
+task_type: one_time | recurring | triggered
+schedule: optional cron
+trigger: optional event
+archetype: inherited or overridden
+required_personas:
+  - wide
+  - main
+  - security
+  - tall
+  - alternative
+allowed_tools:
+  - read_file
+  - write_file
+  - execute_code
+  - git_operation
+  - query_memory
+  - fetch_url
+  - context_swap
+acceptance_criteria:
+  - criterion
+budget:
+  max_jobs: int
+  max_llm_calls: int
+  max_tokens: int
+  max_wall_time: duration
+dependencies:
+  - task_ids
+status: pending | ready | running | paused | blocked | completed | failed
 ```
 
-**Goal Expansion Flow:**
-1. User writes 1–2 sentences.
-2. Agent streams expansion (1–2 mins): assumptions, questions, proposed structure.
-3. User answers/refines (1–3 cycles).
-4. Goal + Projects + Tasks + Topics created. Agent begins.
+---
 
-**Task Types:**
-- **Recurring:** Cron schedule (e.g., `0 8 * * *`).
-- **One-time:** Run once.
-- **Triggered:** Sensor event (e.g., `new_file:inbox/*.pdf`).
+## 8. Job Model & State Machine
+
+A `Job` is one execution of a `Task` through the Dialectical Engine.
+
+### 8.1 Job States
+
+```text
+queued
+context_building
+planning            # Dialectical Phase 1; explicit state so planning is observable and resumable
+diverging
+evaluating          # includes running_tests as a tracked sub-state of evaluation
+reflecting
+synthesizing
+comparing
+awaiting_approval
+paused
+completed
+failed
+cancelled
+```
+
+> **Note on `running_tests`:** test execution is part of the Evaluation phase (Phase 3). It is tracked as a sub-state of `evaluating` rather than a separate top-level state, so a crash during a test run resumes into `evaluating`, not an ambiguous intermediate state.
+
+### 8.2 State Machine Rules
+
+- State is serialized to SQLite after **every** transition.
+- Transitions are atomic. If the Core crashes mid-transition, recovery resumes from the last committed state.
+- `diverging` → `evaluating` is mandatory (no skipping evaluation).
+- `evaluating` → `reflecting` only if no candidate passed (otherwise → `synthesizing`).
+- `synthesizing` → `comparing` is mandatory.
+- `comparing` → `completed` if winner is `new` or `previous`. Otherwise → `failed` or retry.
+- Wall-time budgets are enforced **per phase** (see §29 `execution:`), not only per job — a single global timeout cannot fairly cover both a quick reflection and a full test-suite run in a Job Pod.
+
+### 8.3 Job Object
+
+```yaml
+id: uuid
+task_id: uuid
+project_id: uuid
+status: state
+persona_plan: map
+context_bundle_id: uuid
+artifact_candidates:
+  - artifact_ids
+best_artifact_id: optional
+evaluation_records:
+  - evaluation_ids
+correction_records:
+  - correction_ids
+hitl_requests:
+  - request_ids
+token_usage:
+  prompt_tokens: int
+  completion_tokens: int
+  estimated_cost: optional
+started_at: timestamp
+finished_at: timestamp
+error: optional
+recovery_count: int
+```
 
 ---
 
-## 11. Proactive Modes & Artifacts
+## 9. Artifact Model & Lifecycle
 
-**Priority:** `user tasks → execution → theoretical → genesis → idle`
+### 9.1 Artifact Types
 
-- **Execution (Contained):** Forge (new branches), Whittle (reduce), Harden (tests/edges), Tend (deps/lint).
-- **Theoretical (Proposals):** Daydream (synthesize), Blue Sky (research), Deep Dream (speculative), Self-Improvement (own code).
-- **Genesis:** Finds unexplored intersections, builds PoC.
+| Type | Examples |
+|---|---|
+| `code` | Source files, tests, build scripts |
+| `document` | Markdown, PDF, LaTeX, report |
+| `proposal` | Plan, design, brainstorm result |
+| `dataset` | CSV, JSON, SQLite export |
+| `media` | Audio, video, image, rendered output |
+| `evaluation` | Test report, comparison report |
+| `configuration` | YAML, JSON, environment templates |
 
-**Feedback Loop:** Rejections with reasons stored in long-term memory. Injected as Layer 5 in future prompts for the same project/mode.
+### 9.2 Artifact Fields
+
+```yaml
+id: uuid
+job_id: uuid
+project_id: uuid
+type: artifact_type
+path: workspace_path
+version: integer
+git_commit: optional
+status: draft | candidate | accepted | rejected | quarantined
+metadata: map
+created_at: timestamp
+```
+
+### 9.3 Artifact Status Flow
+
+```text
+draft → candidate → accepted
+                 → rejected → (feedback generated)
+          → quarantined (security scan failure)
+```
+
+- `draft`: Generated by the Dialectical Engine during divergence.
+- `candidate`: Passed initial evaluation, promoted for comparison.
+- `accepted`: Won the comparison phase. Written to workspace. Git committed.
+- `rejected`: Lost comparison or failed evaluation. Triggers `CorrectionRecord` if pattern is identifiable.
+- `quarantined`: Failed security scan. Isolated. Never written to workspace.
 
 ---
 
-## 12. Intelligence Layer
+## 10. Multidimensional Context Engine (MCE)
 
-### 12.1 Prompt Architecture (Five Layers)
+Athanor abandons simple 2D progressive summarization in favor of an N-Dimensional Context Gradient that balances **Lossless Division** and **Deterministic Compaction** to prevent information corruption while respecting hardware KV-cache limits.
 
-1. **Base (Mountain):** Hardcoded identity, safety, tool interface. Immutable.
-2. **Mode (River):** Mode-specific behavior. Versioned in SQLite.
-3. **Task (River):** Current task, project, goal context.
-4. **Context (Dynamic):** Retrieved memories, files, conversation.
-5. **Feedback (Dynamic):** Past rejections for this project/mode.
+### 10.1 Full-Fidelity Division (Lossless Swapping)
 
-### 12.2 Error Recovery
+Critical artifacts (source code, test outputs, exact user constraints) are never summarized. They are structurally divided.
 
-| Error | Recovery | Escalation |
+- **Division Engine:** Algorithmic. Splits by AST (Abstract Syntax Tree) boundaries for code, or by structural headers for text/markdown. No LLM inference required. Zero information loss.
+- **Active Chunk:** Loaded into the LLM context window.
+- **Dormant Chunks:** Held intact in fast local storage (SQLite/RAM).
+- **Dormant Index:** A table of contents provided to the LLM in the prompt. Contains chunk IDs, summaries (1-line), and metadata (file path, line range, type).
+- **Context Swap Tool:** If the LLM requires dormant information, it issues a `context_swap(target_chunk_id)` tool call. The system flushes the current Active Chunk to Dormant storage and loads the requested chunk perfectly intact.
+
+### 10.2 The N-Dimensional Context Gradient
+
+Memory objects are profiled across three axes to determine their treatment:
+
+| Axis | Dimensions |
+|---|---|
+| **Epistemic Type** | `code`, `test_output`, `conversation`, `log`, `documentation` |
+| **Temporal State** | `active` (current step), `recent` (current job), `episodic` (past jobs), `archival` |
+| **Semantic Relevance** | `direct`, `tangential`, `dormant` (calculated dynamically per task via vector similarity) |
+
+### 10.3 Treatment Matrix & Temperature Invariants
+
+To prevent compaction corruption (hallucination, drift, paraphrasing), **all context manipulation operations strictly use Temperature 0.0**.
+
+| Profile Combination | Treatment | Mechanism | Persona |
+|---|---|---|---|
+| `code` / `test_output` + `active/recent` | **Pure Division** | Algorithmic AST/structural splitting. Zero LLM inference. | N/A |
+| `log` / `test_output` + `episodic` | **Deterministic Compaction** | Temp 0.0 LLM pass. Extracts exact error codes, stack traces, return values. Discards verbose noise. | `security` |
+| `conversation` / `brainstorming` + `archival` | **Semantic Compaction** | Temp 0.0 LLM pass. Extracts explicit decisions, constraints, derived rules. Discards raw chat. | `security` |
+| `documentation` + `episodic/archival` | **Semantic Compaction** | Temp 0.0 LLM pass. Extracts key facts, API signatures, architecture decisions. | `security` |
+
+### 10.4 Real-Time KV Cache Monitoring
+
+The MCE does not only manage context at job start — it monitors KV cache usage in real time during job execution.
+
+**Monitoring Signals:**
+- Token count in the active prompt (measured before each LLM call).
+- Ollama-reported context usage (if available via API).
+- Estimated KV cache pressure: `active_tokens / max_context`.
+
+**Dynamic Triggers:**
+
+| Condition | Action |
+|---|---|
+| `active_tokens > 85% of max_context` | Issue `context_swap` suggestion to LLM. Move oldest non-pinned, non-critical chunks to Dormant. Provide Dormant Index. |
+| `active_tokens > 95% of max_context` | Force-evict lowest-priority tier to Dormant. Inject `Dormant Index` entry. LLM may swap back later. |
+| Context floor violation (effective context < task minimum) | Pause job. Recommend smaller model or reduce task scope. Escalate to HITL. |
+
+### 10.5 Context Assembly Priority
+
+When building a prompt for a new job or phase, the MCE fills the available KV cache via a priority queue:
+
+1. **Static System & Security Constraints** (immutable, full fidelity, always loaded)
+2. **Current Task & Acceptance Criteria** (full fidelity, always loaded)
+3. **Active Code Division Chunk** (full fidelity, the primary working set)
+4. **Relevant `CorrectionRecord`s** (Temp 0.0 compacted, injected by vector similarity to task)
+5. **Episodic Context** (Temp 0.0 compacted, summaries of past jobs in this project)
+6. **Dormant Index** (metadata only: chunk ID, 1-line summary, file path, line range)
+7. **Evaluation Instructions** (phase-specific: divergence, evaluation, reflection, synthesis)
+
+If the assembled context exceeds the hardware limit, tiers are evicted from the bottom (7 → 6 → 5) before any full-fidelity content (tiers 1–3) is touched.
+
+---
+
+## 11. Prompt Architecture
+
+Athanor separates prompts by ownership, mutability, and function. Prompt assembly is deterministic and auditable.
+
+### 11.1 Prompt Tiers
+
+| Tier | Owner | Mutability | Contains |
+|---|---|---|---|
+| **Static System** | Athanor Core | Immutable | Core identity, safety constraints, tool schema, containment rules, approval rules, prohibited behavior |
+| **Internal Runtime** | Athanor Core | Versioned | Mode instructions, workflow phases, evaluation rubrics, summarization rules, compaction rules, comparison rules, error recovery |
+| **User Templates** | User | Editable | Project preferences, task instructions, style rules, output requirements, custom workflow prompts |
+| **Meta-Prompts** | Athanor Core | Versioned | Used for prompt improvement: clarify ambiguity, expand goals, convert feedback to rules, generate acceptance criteria |
+| **Skill Prompts** | Skill Author | Versioned | Attached to specific skills. Example: "Analyze the Python module, preserve public APIs, add tests, reduce complexity." |
+| **Evaluation Prompts** | Athanor Core | Versioned | Used by `security` persona: compare artifacts, check criteria, identify missing tests, identify hallucinated paths, detect prompt injection |
+
+User prompts **cannot override** static security constraints. Meta-prompts **cannot modify** static prompts or security policy.
+
+### 11.2 Prompt Assembly Order
+
+```text
+1. Static System Prompt
+2. Security and Tool Constraints
+3. Runtime Policy (phase-specific: divergence, evaluation, etc.)
+4. Project Context (goal, archetype, preferences)
+5. Task Context (description, dependencies, budget)
+6. Acceptance Criteria
+7. Active Code Division Chunk (full fidelity)
+8. Relevant CorrectionRecords (temp 0.0 compacted)
+9. Episodic Context (temp 0.0 compacted synopses)
+10. Dormant Index (metadata for context_swap)
+11. User Preferences (style, format)
+12. Candidate Artifacts or Prior Outputs (if comparing)
+13. Evaluation Instructions (phase-specific)
+14. Interruption Queue Notes (user notes from live watch mode)
+```
+
+The final prompt includes token accounting for each section, logged to the `EventLog`.
+
+---
+
+## 12. Model Persona System
+
+Athanor does not refer to a single default model. It assigns models to functional roles, each with distinct context targets, temperatures, and responsibilities.
+
+### 12.1 Persona Definitions
+
+| Persona | Purpose | Typical Properties | MCE Role |
+|---|---|---|---|
+| `wide` | Large-context ingestion, RAG, repository reading, Daydreaming exploration | Small model, high context (64k–128k), moderate temp (0.7) | Reads dormant chunks, indexes repositories, generates 1-line summaries for Dormant Index |
+| `tall` | Hard reasoning, DAG decomposition, architecture, complex code synthesis | Large model, constrained context (8k–16k), low temp (0.2) | Primary consumer of Active Chunks via `context_swap` |
+| `main` | General execution, boilerplate, normal implementation, reflection | Balanced model and context (32k), moderate temp (0.4) | Standard context usage, benefits from Dormant Index |
+| `security` | Validation, judging, filtering, syntax checking, **all compaction operations** | Small, fast, strictly Temp 0.0 | Runs Deterministic and Semantic Compaction. Generates `EvaluationRecord`s. |
+| `alternative` | Second perspective, orthogonal generation, divergence | Different architecture family from Main/Tall, high temp (0.8) | Standard context usage, may request `context_swap` for alternative approaches |
+
+### 12.2 Example Persona Configuration
+
+```yaml
+personas:
+  wide:
+    model: "qwen2.5:7b"
+    context_target: 65536
+    temperature: 0.7
+  tall:
+    model: "qwen2.5-coder:32b"
+    context_target: 16384
+    temperature: 0.2
+  main:
+    model: "mistral-nemo:12b"
+    context_target: 32768
+    temperature: 0.4
+  security:
+    model: "phi3:3.8b"
+    context_target: 8192
+    temperature: 0.0
+  alternative:
+    model: "llama3.1:8b"
+    context_target: 32768
+    temperature: 0.8
+```
+
+### 12.3 Hardware-Adaptive Context Calculation
+
+Ollama sets context at model load time. Core calculates available context before requesting a load:
+
+```text
+max_context = (available_memory - model_size - overhead - buffer) / kv_cost_per_token
+effective_context = min(max_context, model_architecture_maximum, persona_context_target)
+```
+
+> **macOS:** `available_memory` is budgeted against the podman machine VM limits, not raw host RAM.
+
+If `effective_context < task_context_minimum`:
+
+1. Try another persona.
+2. Recommend a smaller model with larger context.
+3. Reduce task scope explicitly.
+4. Escalate to HITL if quality may be compromised.
+
+**Never silently reduce context below the required floor.**
+
+### 12.4 Performance Guarding
+
+| Signal | Action |
+|---|---|
+| Inference latency significantly above average | Notify user, suggest smaller model |
+| RAM pressure above 85% | Pause background/Daydreaming jobs |
+| RAM pressure above 95% | Save state, pause all jobs |
+| Battery below threshold | Pause jobs, flush state |
+| Thermal throttling | Reduce concurrency |
+| System sleep | Flush state and pause gracefully |
+| System wake | Resume from checkpoint |
+
+### 12.5 Model Lifecycle
+
+- Load models when needed.
+- Reload when context target changes.
+- Avoid rapid reload loops (debounce).
+- Allow Ollama to unload idle models.
+- Prefer reusing already-loaded models for repeated jobs.
+
+---
+
+## 13. The Dialectical Execution Engine
+
+Complex tasks are solved via a multi-phase, multi-temperature state machine.
+
+### 13.1 Phase Definitions
+
+#### Phase 1: Planning
+- **Temperature:** Low (0.2). **Persona:** `tall` or `main`.
+- Read task, project documents, acceptance criteria. Identify missing information. Propose implementation plan, tests, and documentation updates.
+
+#### Phase 2: Divergence
+- **Temperature:** High (0.7–1.1). **Personas:** `main`, `tall`, or `alternative`.
+- Generate multiple candidate plans or implementations. Encourage different approaches. Avoid premature convergence.
+- Default candidates: 3. For hard tasks: up to 10.
+
+#### Phase 3: Evaluation
+- **Temperature:** Zero (0.0). **Persona:** `security`.
+- Check against acceptance criteria. Run tests in Job Pod. Run linters. Validate file paths and tool output. Compare candidates. Identify failures. Rank candidates.
+- **Rule:** This phase is maximally deterministic.
+
+#### Phase 4: Reflection
+- **Temperature:** Moderate to high (0.6–0.8). **Persona:** `main`, `tall`, or `alternative`.
+- Analyze why candidates failed. Identify missing constraints. Propose improvements and hybrid approaches. Ask whether a better method exists.
+
+#### Phase 5: Synthesis
+- **Temperature:** Low (0.2). **Persona:** `tall` or `main`.
+- Produce final artifact with tests, documentation, change summary, and known limitations.
+
+#### Phase 6: Comparison
+- **Temperature:** Zero (0.0). **Persona:** `security`.
+- Compare final artifact with previous best using acceptance criteria, test results, and the evaluation rubric.
+- Output (structured JSON):
+
+```json
+{
+  "winner": "new|previous|none",
+  "confidence": 0.0,
+  "reasons": [],
+  "missing_requirements": []
+}
+```
+
+#### Phase 7: Commit or Escalate
+- **If accepted:** Write artifact to workspace. Create Git branch. Create atomic commit. Mark artifact as `accepted`. Request approval for external actions if needed.
+- **If not accepted:** Store evaluation. Retry if budget remains. Otherwise escalate to HITL.
+
+### 13.2 Exploration Paths
+
+An `ExplorationPath` is a user-definable sequence of prompt and temperature stages that overrides the default Dialectical phases.
+
+```yaml
+id: uuid
+name: string
+description: string
+stages:
+  - name: divergence
+    persona: alternative
+    temperature: 1.1
+    prompt_template: template_id
+    max_tokens: int
+  - name: evaluation
+    persona: security
+    temperature: 0.0
+    prompt_template: template_id
+    max_tokens: int
+  - name: reflection
+    persona: main
+    temperature: 0.8
+    prompt_template: template_id
+    max_tokens: int
+  - name: synthesis
+    persona: tall
+    temperature: 0.2
+    prompt_template: template_id
+    max_tokens: int
+```
+
+Exploration paths can be attached to projects or tasks, enabling custom workflows like "brainstorm-heavy" or "security-paranoid" modes.
+
+---
+
+## 14. Coding Workflow
+
+For code projects, Athanor defaults to test-driven execution.
+
+```text
+1. Read repository structure (wide persona).
+2. Read documentation (wide persona).
+3. Read acceptance criteria.
+4. Generate or refine tests (tall persona, planning phase).
+5. Generate implementation candidates (main/alternative, divergence phase).
+6. Run tests in Job Pod (security persona, evaluation phase).
+7. Run linters and formatters.
+8. Compare results (security persona, comparison phase).
+9. Update documentation (main persona, synthesis phase).
+10. Create Git commit on agent-created branch.
+11. Request approval for push if required.
+```
+
+**Required coding artifacts:** source changes · tests · test results (`EvaluationRecord`) · documentation updates · change summary · Git commit metadata.
+
+**Coding context rules:**
+- Use `wide` for repository ingestion and Dormant Index generation.
+- Use `main` for normal implementation; `tall` for complex modules.
+- Use `security` for evaluation and all compaction.
+- Use `alternative` for second opinions on architecture.
+
+---
+
+## 15. Brainstorming Workflow
+
+For exploratory work, Athanor generates and evaluates ideas without immediately writing code.
+
+```text
+1. Expand goal into questions and assumptions (tall persona).
+2. Generate multiple directions (alternative persona, high temp).
+3. Apply constraints (security persona, temp 0.0).
+4. Score ideas against project goals (security persona, temp 0.0).
+5. Select strongest ideas (main persona, reflection).
+6. Produce proposal artifact (tall persona, low temp).
+```
+
+Output artifact:
+
+```yaml
+title: string
+summary: string
+assumptions:
+  - assumption
+questions:
+  - question
+options:
+  - name: string
+    description: string
+    strengths: []
+    weaknesses: []
+    risks: []
+recommendation: string
+next_tasks:
+  - task_definition
+```
+
+---
+
+## 16. Research Workflow
+
+Research tasks use the Gateway and Internet Gated Reader by default.
+
+```text
+1. Define research question.
+2. Retrieve allowed sources (via Gateway, allowlist enforced).
+3. Extract readable content (Reader Mode: HTTP fetch → readability → sanitize → markdown).
+4. Summarize with citations (security persona, temp 0.0).
+5. Identify contradictions (main persona, reflection).
+6. Produce report artifact (tall persona, synthesis).
+```
+
+**Rules:**
+- No JavaScript-heavy browsing by default.
+- Reader Mode first. Zero JS execution.
+- Browser Mode only with explicit HITL approval, in an isolated Job Pod.
+- All retrieved documents pass through the Scanner (prompt-injection heuristics, malware scan).
+- Source URLs and retrieval timestamps are stored in the `EventLog`.
+- Default network policy: `deny`. Allowlist must be explicitly configured.
+
+---
+
+## 17. Daydreaming Engine (Idle-State Execution)
+
+When the job queue is empty, the system is idle, and AC power is present, Athanor enters Daydream Mode, spawning low-priority background jobs.
+
+### 17.1 Daydreaming Actions
+
+| Action | Persona | Description |
 |---|---|---|
-| Invalid tool call | Re-prompt with schema (max 2) | Abandon step |
-| Hallucinated path | Inject actual file listing (max 2) | Halt |
-| Loop (3× same call) | Inject loop-breaking prompt | Halt |
-| Context overflow | Emergency compaction | Split task |
-| Timeout (>120s) | Retry simplified (max 1) | Halt |
-| Sandbox failure | Boot fresh VM (max 1) | Halt |
+| **Memory Consolidation** | `security` (temp 0.0) | Run Deterministic and Semantic Compaction on `episodic` and `archival` memory. Generate synopses. Update Dormant Index. |
+| **Repository Exploration** | `wide` | Read repository files not yet indexed. Update vector embeddings in SQLite (sqlite-vec). Generate 1-line summaries for Dormant Index entries. |
+| **Skill Refinement** | `main` | Review past `CorrectionRecord`s. Attempt to write new Python skills or update prompt templates to prevent past failures. **Must pass security scan. Must not modify static prompts.** |
+| **Proactive Documentation** | `main` | Scan for undocumented functions (missing docstrings, missing README sections). Generate draft markdown documentation artifacts for user review. |
+| **Feedback Review** | `security` (temp 0.0) | Analyze patterns in rejections and failures. Propose new global `CorrectionRecord`s derived from repeated project-level corrections. |
 
-**Recovery budget:** Max 8 total recoveries per task. Exceeded → halt.
+### 17.2 Daydreaming Constraints
 
----
+- Daydreaming jobs run at lowest priority. Yield immediately if user becomes active or a real job is queued.
+- Budget-limited: max 2 concurrent, max 30 minutes wall time each.
+- Daydreaming jobs **cannot** create Git commits, push to remotes, or modify accepted artifacts.
+- Daydreaming output is always `draft` status, requiring user review to promote.
+- Disabled on battery power.
 
-## 13. 24/7 Reliability & System Internals
+### 17.3 Daydream Log
 
-- **System Tray:** States (idle/active/waiting/degraded/error/battery/thermal).
-- **Watchdog:** Unresponsive >60s → restart. Uptime >7 days → restart at idle.
-- **Backups:** Local compressed archives. Retention via `max_local_backups`.
-- **Logging:** SQLite + rotating file. Categories: tasks, recovery, alarms, airlock, network, VM, sensors.
-- **Migration:** Versioned, forward-only SQL embedded in binary. Backup before migration.
-
----
-
-## 14. Web UI & Sensors
-
-### 14.1 Web UI (Vanilla JS)
-
-**Check-in Flow:** Daily Digest → Completed Work → Issues → Requests → Chat.
-**Views:** Chat, Requests, Workspace, Airlock Monitor, Network Log, Memory Browser, Agent Status (Hardware profile, alarms), Privacy Log, Statistics (Approval rates, rejection reasons), Ontology CRUD, Settings.
-
-### 14.2 Sensor Bus
-
-User input (real-time), Workspace files (`fsnotify`), RSS/Email (15-30m), Calendar/System logs (hourly), Browser activity (event-driven). Filtered for signal, logged in Privacy Log.
-
----
-
-## 15. Deployment & Onboarding
-
-### 15.1 Installation
-
-- **macOS:** `.dmg` → `.app`. Requests Virtualization.framework permission.
-- **Linux:** `curl -fsSL https://get.athanor.dev | sh`. Downloads Firecracker/jailer, checks KVM, creates systemd service.
-
-### 15.2 Onboarding (First 5 Minutes)
-
-1. Open `localhost:8080`. Clean screen: *"What do you want this agent to work on?"*
-2. User types goal. Agent streams expansion.
-3. User approves structure and initial domains.
-4. First artifact appears.
+```yaml
+id: uuid
+started_at: timestamp
+finished_at: timestamp
+action: memory_consolidation | repo_exploration | skill_refinement | proactive_documentation | feedback_review
+persona_used: persona
+artifacts_produced:
+  - artifact_ids (all draft status)
+corrections_proposed:
+  - correction_ids
+memory_compacted:
+  chunks_processed: int
+  tokens_saved: int
+dormant_index_entries_added: int
+```
 
 ---
 
-## 16. Roadmap
+## 18. Feedback System
 
-### MVP (v0.1)
-Go daemon + JS UI, Ollama chat + SSE, Hardware adaptation + context floors, SQLite state/ontology, Goal expansion, File airlock, Ephemeral MicroVM, Git-native workspace, Constrained tools, HITL for external actions, Egress proxy, Meta-prompt, Daily Digest, Kill switch, System tray, Feedback loop, Statistics, Forge mode, Error recovery, Alarms, Sleep/wake handling, Integration/Security tests.
+Feedback is the primary mechanism for self-improvement.
 
-### v1.0
-Sensor bus (RSS/fsnotify), Long-term hybrid memory, Progressive compaction, Full artifact taxonomy, Whittle/Harden/Tend, Daydream/Blue Sky, Reader Mode, Airlock/Privacy UI, ClamAV, IMAP, Model routing, Compute budgets, Thermal monitoring, Backup retention, Prompt regression tests, Quality/Drift alarms.
+### 18.1 Feedback Sources
 
-### v2.0+
-Genesis, Deep Dream, Self-Improvement, Browser Mode, Cloud backup, Natural-language workflows, Confidence-gated autonomy.
+- User rejection of an artifact.
+- User explicit correction.
+- Test failure.
+- Evaluator failure (`security` persona comparison).
+- Security scan failure.
+- Runtime error in Job Pod.
+- Repeated loop detection (same tool call repeated N times).
+- Budget exhaustion.
+- Hallucinated path detection (referenced file does not exist).
+
+### 18.2 CorrectionRecord Object
+
+```json
+{
+  "id": "uuid",
+  "project_id": "uuid or null",
+  "job_id": "uuid or null",
+  "artifact_id": "uuid or null",
+  "scope": "project|global",
+  "category": "architecture|style|testing|security|performance|tooling|documentation|other",
+  "severity": "low|medium|high|critical",
+  "user_feedback": "Do not use global state here.",
+  "derived_rule": "Prefer explicit dependency injection over global state.",
+  "applied_count": 0,
+  "created_at": "timestamp",
+  "updated_at": "timestamp"
+}
+```
+
+### 18.3 Feedback Injection Rules
+
+- High-severity corrections are injected before low-severity corrections.
+- Project-scoped corrections outrank global corrections when relevant.
+- Corrections are retrieved by vector similarity to the current task description.
+- Corrections are summarized to reduce token usage (Temp 0.0, `security` persona).
+- Users can mute, edit, promote, or delete corrections via the UI.
+
+### 18.4 Mandatory Rejection Feedback
+
+When a user rejects an artifact, the UI requires: category, severity, reason, desired behavior, and scope (project or global). This is fast but structured, ensuring every rejection produces a usable `CorrectionRecord`.
+
+---
+
+## 19. Evaluation System
+
+The evaluator's main job is not to decide whether something is good in isolation, but whether it is **better than the alternative**.
+
+### 19.1 Evaluation Inputs
+
+Acceptance criteria · test results · linter results · documentation completeness · runtime errors · token cost · security scan results · prior user corrections · candidate artifacts.
+
+### 19.2 Evaluation Output
+
+```json
+{
+  "artifact_id": "uuid",
+  "compared_against": "uuid or null",
+  "score": 0.0,
+  "passed_tests": true,
+  "failed_tests": [],
+  "missing_criteria": [],
+  "security_issues": [],
+  "style_issues": [],
+  "better_than_previous": true,
+  "confidence": 0.0,
+  "summary": "string"
+}
+```
+
+### 19.3 Comparison Rule
+
+A new artifact becomes the best artifact only if:
+
+```text
+tests_pass_better_or_equal
+AND acceptance_criteria_improve_or_equal
+AND no_new_security_issue
+AND evaluator_confidence > threshold
+```
+
+---
+
+## 20. Human-in-the-Loop (HITL) System
+
+HITL is not a report. It is a live queue.
+
+### 20.1 HITL Request Types
+
+Approve external domain access · remote Git push · package installation · destructive operation · cloud inference usage · high compute budget · Browser Mode · resolve ambiguity (provide missing context) · provide missing credential through broker · accept or reject artifact · confirm project-scope correction · confirm global correction.
+
+### 20.2 HITL Request Object
+
+```yaml
+id: uuid
+job_id: uuid
+task_id: uuid
+project_id: optional
+type: approval_type
+severity: low | medium | high | critical
+summary: string
+details: string
+actions:
+  - approve
+  - reject
+  - modify
+  - defer
+created_at: timestamp
+expires_at: optional
+```
+
+### 20.3 Live Watch Mode
+
+The UI allows users to watch a job in real time:
+
+- Token stream (live LLM output).
+- Collapsible phase tree (current Dialectical phase highlighted).
+- Tool call log (every `Action` logged with input/output).
+- Test output (live from Job Pod).
+- Artifact candidates (draft and candidate versions viewable).
+- Evaluation scores (live `EvaluationRecord` updates).
+- Pending approvals (HITL queue inline).
+- Pause / Stop / Retry controls.
+- Interruption Queue (add notes).
+
+### 20.4 Interruption Queue
+
+Users should not interrupt generation mid-token (this corrupts the context). Instead, user notes enter an `InterruptionQueue` and are injected at the next safe point:
+
+- Next Dialectical phase transition.
+- Next evaluation loop.
+- Next context assembly.
+- Next retry.
+
+The `EventLog` records every injection.
+
+---
+
+## 21. Security Architecture
+
+### 21.1 Rootless Podman
+
+All Athanor containers run rootless. No privileged containers by default.
+
+### 21.2 Job Pod Hardening
+
+```text
+--read-only-rootfs
+--cap-drop=all
+--security-opt=no-new-privileges
+--security-opt=seccomp=<profile>
+--tmpfs /tmp:rw,noexec,nosuid,nodev
+--memory=<limit>
+--cpus=<limit>
+--pids-limit=<limit>
+--network=none (default) or restricted internal
+```
+
+### 21.3 File Airlock
+
+All files entering or leaving agent-managed workspaces pass through the Scanner.
+
+**Ingress rules:**
+- Resolve symlinks (reject if they escape workspace).
+- Validate root paths.
+- Copy content only (no metadata that could be malicious).
+- Reject suspicious file types (executables, device files, setuid/setgid).
+- Scan archives (zip bombs, path traversal).
+- Scan for malware (ClamAV).
+- Scan for prompt-injection patterns (YARA + security model).
+- Quarantine failures.
+
+**Egress rules:**
+- Use `lstat` semantics (reject symlinks).
+- Reject device files.
+- Reject setuid/setgid files.
+- Reject unexpected executables.
+- Scan before export.
+
+### 21.4 Prompt Injection Scanning
+
+The Scanner inspects: uploaded documents (inbox), retrieved web content (from Gateway), user-imported prompts, skill manifests, plugin metadata.
+
+**Detection methods:**
+- Heuristic rules (known injection patterns).
+- Small security-model classification (`security` persona, temp 0.0).
+- Quarantine on uncertainty.
+
+### 21.5 Internet Gated Reader (Network Gateway)
+
+All external HTTP traffic goes through the Gateway.
+
+**Gateway responsibilities:**
+- Domain allowlist enforcement.
+- Rate limiting.
+- Request logging.
+- Header sanitization (strip cookies, auth tokens, PII).
+- Response size limits.
+- Reader Mode extraction (HTTP fetch → readability → sanitize → markdown).
+- Cloud inference mediation (if enabled; injects credentials into approved outbound requests only).
+
+**Default network policy:**
+
+```yaml
+network:
+  default_policy: deny
+  allow_list: []
+  rate_limit_per_minute: 30
+  max_response_bytes: 10485760
+```
+
+### 21.6 Browser Mode (Restricted)
+
+Browser Mode is optional and requires explicit HITL approval.
+
+- Runs **only** inside an isolated Job Pod with `--network=none` except for a proxied connection to the Gateway.
+- Use cases: JavaScript-required pages, authenticated flows under user supervision.
+- Time-limited. Automatically terminated after timeout.
+
+### 21.7 Credential Handling
+
+Credentials are **never** passed directly into Job Pods as raw environment variables.
+
+**Preferred model:**
+- Credential broker on Core or host.
+- Gateway injects credentials into approved outbound requests only.
+- Job Pod never sees the secret.
+
+### 21.8 UI & API Access
+
+The UI binds to localhost only. For headless/remote access, use SSH port forwarding rather than exposing a network listener. The Core internal API (used by Job Pods) authenticates via per-job ephemeral tokens as described in §3.2.
+
+---
+
+## 22. Kill Switch and Alarms
+
+### 22.1 Kill Switch
+
+A persistent stop control must be available (UI button + CLI command).
+
+**Actions:**
+- Stop all Job Pods.
+- Cancel active inference calls.
+- Cancel pending fetches.
+- Persist current state to SQLite.
+- Enter frozen mode (no new jobs, no Daydreaming).
+
+### 22.2 Exiting Frozen Mode
+
+Frozen mode never lifts automatically. Unfreezing requires explicit user acknowledgment through the UI or CLI (`athanor unfreeze`), which records the acknowledgment and reason in the `EventLog`. On unfreeze, interrupted jobs resume from their last committed checkpoints.
+
+### 22.3 Alarm Categories
+
+| Alarm | Meaning | Default Level |
+|---|---|---|
+| `loop` | Same tool call or output repeats N times | `alert` |
+| `resource` | Memory, CPU, disk, or token budget exceeded | `alert` |
+| `security` | Suspicious file, prompt, or network behavior | `critical` |
+| `quality` | High rejection rate (>50% of last 10 jobs) | `warning` |
+| `stuck` | No progress for configured duration | `alert` |
+| `hallucination` | Referenced files, symbols, or sources do not exist | `warning` |
+| `budget` | Token or cost budget exceeded | `alert` |
+| `self_modification` | Attempt to modify protected system components | `critical` |
+| `drift` | Attempt to modify static security constraints | `critical` |
+
+**Alarm levels:**
+- `notice`: Logged, no action.
+- `warning`: Logged, UI notification.
+- `alert`: Pauses current job.
+- `critical`: Freezes entire system, requests user intervention.
+
+---
+
+## 23. State, Persistence, and Recovery
+
+### 23.1 SQLite Configuration
+
+```sql
+PRAGMA journal_mode=WAL;
+PRAGMA synchronous=NORMAL;
+PRAGMA busy_timeout=5000;
+PRAGMA foreign_keys=ON;
+```
+
+### 23.2 Stored State
+
+SQLite stores:
+- Projects, Goals, Tasks, Jobs, Actions, Artifacts.
+- Prompt templates, Context bundles, Dormant Index entries.
+- Evaluation records, Correction records.
+- Preferences (project and global).
+- HITL requests, Event logs.
+- Token usage, Network rules.
+- Model persona assignments, Configuration metadata.
+- Daydream logs.
+
+### 23.3 State Persistence Rules
+
+State is serialized to SQLite:
+- After every state-machine node transition.
+- Before and after job phase transitions.
+- After artifact creation.
+- After evaluation.
+- After user approval or rejection.
+- Before sleep.
+- Before shutdown.
+- Before migration.
+
+### 23.4 Backups
+
+```yaml
+backup:
+  auto: true
+  schedule: "0 3 * * *"
+  max_local_backups: 10
+  include_workspace_metadata: true
+```
+
+Backups include: SQLite database, configuration, prompt templates, feedback records, workspace metadata. May exclude large binary artifacts if configured.
+
+### 23.5 Migrations
+
+- Versioned.
+- Forward-only (no destructive down migrations).
+- Embedded in binary.
+- Backup before migration.
+- Rollback only by restoring backup.
+
+### 23.6 Recovery From Power Loss
+
+- SQLite state is recovered from WAL.
+- Incomplete job is marked `interrupted`.
+- Partial artifacts are marked `quarantined` or `draft`.
+- Job resumes from last committed checkpoint on next startup.
+- If no checkpoint is valid, job restarts with a recorded reason in `EventLog`.
+
+---
+
+## 24. Power and Idle Policy
+
+```yaml
+power:
+  require_ac_for_deep_work: true
+  battery_pause_threshold_percent: 20
+  idle_resume_after: 5m
+  allow_battery_override: false
+  pause_on_sleep: true
+  resume_on_wake: true
+  daydream_on_idle: true
+```
+
+| Condition | Action |
+|---|---|
+| AC power present and system idle | Resume or continue deep work / Daydreaming |
+| Laptop on battery | Pause deep work |
+| Battery below threshold | Save state and pause |
+| User active | Reduce resource usage (throttle inference) |
+| User idle for configured period | Resume full background execution |
+| System sleep | Flush state and pause containers gracefully |
+| System wake | Resume from checkpoint |
+
+---
+
+## 25. Tool Interface
+
+Tools are constrained, audited, and available only to Job Pods and the Core orchestrator.
+
+| Tool | Description | HITL Required |
+|---|---|---|
+| `read_file(path)` | Read approved workspace file | No |
+| `write_file(path, content)` | Write approved workspace file | No |
+| `list_files(path)` | List approved directory | No |
+| `search_files(pattern)` | Search workspace content | No |
+| `execute_code(language, code)` | Execute inside Job Pod | No |
+| `run_tests(command)` | Run project tests in Job Pod | No |
+| `git_operation(repo, op)` | Local Git operations (branch, commit) | No |
+| `git_push(repo, remote)` | Push to remote | Yes |
+| `fetch_url(url)` | Fetch through Gateway (Reader Mode) | No (if domain allowlisted) |
+| `search_web(query)` | Search through Gateway | No (if search engine allowlisted) |
+| `browser_mode(url)` | Full browser in isolated Job Pod | Yes |
+| `query_memory(query)` | Hybrid vector + FTS retrieval from SQLite | No |
+| `context_swap(target_chunk_id)` | Swap dormant full-fidelity chunk into active context | No |
+| `create_artifact(type, content)` | Create versioned artifact | No |
+| `request_approval(type, details)` | Create HITL request | N/A |
+| `add_correction(category, reason)` | Create `CorrectionRecord` | No |
+| `install_package(name)` | Install system or language package | Yes |
+
+---
+
+## 26. Skills and Extensibility
+
+Custom jobs and extensions are Python-first.
+
+### 26.1 Skill Object
+
+```yaml
+id: uuid
+name: string
+version: string
+description: string
+runtime: python
+entrypoint: module:function
+dependencies:
+  - python_packages
+permissions:
+  - network
+  - filesystem
+  - subprocess
+prompt_template: optional
+oci_artifact: optional
+```
+
+### 26.2 Skill Rules
+
+- Skills are versioned.
+- Skills are packageable as OCI artifacts or local directories.
+- Skills declare permissions explicitly.
+- Skills are mounted read-only into Job Pods.
+- Skills do not access credentials directly.
+- Skills must pass Scanner inspection before mounting.
+- Skill prompts are versioned with the skill.
+
+Skills return structured results:
+
+```json
+{
+  "status": "success",
+  "artifacts": [],
+  "logs": [],
+  "metrics": {},
+  "errors": []
+}
+```
+
+---
+
+## 27. User Experience
+
+### 27.1 Primary Views
+
+**Dashboard:** Active jobs (with phase indicator), pending HITL approvals, failed jobs, recently completed artifacts, resource usage (RAM/VRAM/CPU), token usage (by persona/project), power state, active alarms, Daydreaming status.
+
+**Watch View:** Live token stream, collapsible phase tree, tool call log, test output, evaluation scores, candidate artifacts with diff view, interruption queue, pause/stop/retry controls.
+
+**Approvals:** Queue of pending HITL requests showing project, task, job, risk level, reason, requested action — with approve/reject/modify controls.
+
+**Projects:** CRUD for settings, goals, documents, acceptance criteria, preferences. Task DAG visualizer. Versioned artifact history with status badges. Editable/mute-able correction records.
+
+**Artifacts:** Versioned output browser. Revision diffs. Accept/reject (triggers structured feedback form). Open in workspace. View Git commit and `EvaluationRecord`. Export.
+
+**Memory Browser:** Long-term memory entries, synopses, pinned context, Dormant Index viewer, compaction layers, correction records, retrieval test tool (query memory, see what comes back).
+
+**Network Log:** Allowed/denied/rate-limited requests, domain approvals, Reader Mode extraction status.
+
+**Security View:** Quarantined files, scan failures, prompt-injection detections, alarm history, kill switch, sandbox status.
+
+**Statistics:** Approval rate, rejection rate and categories, token usage by persona/project, job success rate, test pass rate, average job duration, budget usage, Daydreaming productivity (artifacts proposed, corrections derived, memory compacted).
+
+**Settings:** Models and personas, context minimums, power policy, network allowlist, backup schedule, cloud fallback, token budgets, telemetry preferences, workspace paths, security level, Daydreaming config.
+
+### 27.2 Morning Digest
+
+An asynchronous dashboard summarizing overnight activity:
+- Completed DAGs and tasks.
+- Generated artifacts (draft and accepted).
+- Failed jobs (with reasons).
+- Pending HITL requests.
+- Daydreaming output (documentation drafts, proposed corrections, memory consolidated).
+- Token usage summary.
+
+---
+
+## 28. Observability
+
+### 28.1 Event Log Categories
+
+Athanor logs structured JSON events to SQLite and `state/logs/`:
+
+| Category | Events |
+|---|---|
+| `jobs` | State transitions, phase changes, retries, completions, failures |
+| `recovery` | Checkpoint saves, crash recovery, interrupted job handling |
+| `alarms` | Loop detection, resource limits, security flags, hallucination |
+| `airlock` | Ingress/egress scans, quarantines, prompt-injection detections |
+| `network` | Allowed/denied requests, rate limits, reader extractions |
+| `podman` | Job Pod creation, teardown, socket access |
+| `inference` | Model loads, context calculations, KV cache pressure, latency warnings |
+| `feedback` | Correction creation, injection, applied counts |
+| `context` | Division events, compaction events, swap events, Dormant Index updates |
+| `daydream` | Idle start/stop, actions taken, artifacts produced |
+| `power` | AC/battery transitions, sleep/wake, throttle events |
+| `backup` | Backup creation, migration execution |
+
+### 28.2 Token Accounting
+
+Local token accounting includes:
+- Prompt tokens (per job, per persona, per project).
+- Completion tokens.
+- Total tokens.
+- Estimated cloud cost (only if cloud enabled).
+- Budget cutoffs and usage percentages.
+- Usage by project.
+- Usage by persona.
+- Daydreaming usage (tracked separately for cost-benefit analysis).
+
+---
+
+## 29. Configuration Reference
+
+Complete reference `config.yaml`:
+
+```yaml
+version: 2
+
+agent:
+  active_hours: "00:00-24:00"
+  idle_threshold: 5m
+  max_proactive_tasks_per_day: 10
+
+power:
+  require_ac_for_deep_work: true
+  battery_pause_threshold_percent: 20
+  idle_resume_after: 5m
+  allow_battery_override: false
+  pause_on_sleep: true
+  resume_on_wake: true
+  daydream_on_idle: true
+  daydream_max_concurrent: 2
+  daydream_max_wall_time_minutes: 30
+
+inference:
+  default_backend: ollama
+  ollama_url: "http://host.containers.internal:11434"
+  cloud_enabled: false
+  cloud_requires_approval: true
+
+personas:
+  wide:
+    model: "qwen2.5:7b"
+    context_target: 65536
+    temperature: 0.7
+  tall:
+    model: "qwen2.5-coder:32b"
+    context_target: 16384
+    temperature: 0.2
+  main:
+    model: "mistral-nemo:12b"
+    context_target: 32768
+    temperature: 0.4
+  security:
+    model: "phi3:3.8b"
+    context_target: 8192
+    temperature: 0.0
+  alternative:
+    model: "llama3.1:8b"
+    context_target: 32768
+    temperature: 0.8
+
+context_engine:
+  coding_floor: 32768
+  research_floor: 32768
+  document_floor: 16384
+  simple_floor: 8192
+  compaction_temperature: 0.0
+  enable_lossless_swapping: true
+  kv_cache_warning_threshold: 0.85
+  kv_cache_critical_threshold: 0.95
+
+execution:
+  divergence_candidates: 3
+  max_hard_task_variations: 10
+  judge_persona: security
+  require_tests_for_code: true
+  require_documentation_for_code: true
+  compare_before_accept: true
+  # Wall-time budgets are enforced per Dialectical phase (planning, diverging,
+  # evaluating, reflecting, synthesizing, comparing). A single global job timeout
+  # cannot fairly cover both a quick reflection and a full test-suite run in a
+  # Job Pod; per-phase defaults are derived from these budgets.
+  phase_wall_time_budgets:
+    planning: 120s
+    evaluating: 600s        # must accommodate Job Pod boot + test suite
+    default: 300s
+
+limits:
+  max_concurrent_jobs: 2
+  max_concurrent_llm_calls: 1
+  max_concurrent_fetches: 5
+  max_tasks_per_hour: 20
+  max_total_recoveries_per_job: 8
+
+recovery:
+  max_tool_call_retries: 2
+  max_loop_interventions: 1
+  max_context_compactions: 3
+
+network:
+  default_policy: deny
+  allow_list: []
+  rate_limit_per_minute: 30
+  max_response_bytes: 10485760
+  reader_mode_default: true
+  browser_mode_requires_approval: true
+
+security:
+  scan_ingress_files: true
+  scan_egress_files: true
+  prompt_injection_scan: true
+  quarantine_suspicious_files: true
+
+backup:
+  auto: true
+  schedule: "0 3 * * *"
+  max_local_backups: 10
+  include_workspace_metadata: true
+
+logging:
+  level: info
+  categories:
+    - jobs
+    - recovery
+    - alarms
+    - airlock
+    - network
+    - podman
+    - inference
+    - feedback
+    - context
+    - daydream
+    - power
+    - backup
+```
+
+---
+
+## 30. Installation and Onboarding
+
+### 30.1 Prerequisites
+
+**Required:**
+- Podman (rootless mode capable).
+- Ollama or another inference endpoint.
+- Sufficient disk space.
+- Git.
+
+**Optional:**
+- Python (for skills development).
+- ClamAV (for file scanning).
+- Language-specific toolchains (for Job Pods).
+- Media tools (for media archetypes).
+
+> **macOS:** Podman runs inside a VM (`podman machine`). Athanor's memory budgeting and sleep/wake coordination account for the VM automatically; expect somewhat higher baseline overhead than on Linux.
+
+### 30.2 First-Run Doctor
+
+```bash
+athanor doctor
+```
+
+**Checks:**
+- Podman installed and rootless mode available.
+- Podman socket reachable.
+- Ollama reachable.
+- Available RAM and VRAM.
+- Disk space.
+- Filesystem locking support.
+- Git installed.
+- Workspace permissions.
+- Power policy.
+- Network configuration.
+- Model availability (per persona) — with remediation: if a persona model is missing, Doctor offers to run the equivalent `ollama pull` command.
+- Context feasibility (can hardware meet context floors?).
+
+Doctor proposes fixes where possible.
+
+### 30.3 First Project
+
+The first-run flow does not open a generic chat. It creates a project.
+
+```yaml
+name: unique
+goal: "One sentence describing the objective."
+archetype: text | code | document | data | media
+initial_documents: optional
+acceptance_criteria: optional
+start_immediately: boolean
+```
+
+After creation, the user can:
+- Start immediately and watch execution.
+- Queue for later.
+- Create additional projects.
+
+### 30.4 Cloud Warning
+
+If the user configures a cloud endpoint:
+
+```text
+Cloud inference is optional.
+Athanor is optimized for local iterative execution.
+Cloud calls may increase cost quickly, especially during multi-pass evaluation.
+Enable cloud usage only as a fallback or for explicitly approved tasks.
+```
+
+Requires explicit confirmation.
+
+---
+
+## 31. Testing Strategy
+
+### 31.1 Unit Tests
+- State machine transitions.
+- DAG decomposition and cycle detection.
+- MCE KV-cache math and dynamic trigger logic.
+- Temp 0.0 compaction determinism (same input → same output).
+- Prompt assembly order and token accounting.
+- Feedback injection ordering by severity and scope.
+- Configuration parsing and validation.
+
+### 31.2 Integration Tests
+- Podman Job Pod creation and strict teardown validation.
+- Workspace mounting and Git atomic commit verification.
+- Gateway allowlist enforcement and Reader Mode markdown extraction.
+- Scanner quarantine behavior for symlinks, executables, and path traversal.
+- SQLite WAL persistence and recovery after simulated crash.
+- `context_swap` tool: verify chunk loaded matches original byte-for-byte.
+
+### 31.3 Security Tests
+- Symlink escape attempts.
+- Path traversal payloads.
+- Prompt-injection payloads in uploaded documents.
+- Podman socket misuse attempts from Job Pods.
+- Credential leakage detection (verify secrets never appear in Job Pod environment).
+- Kill switch activation and frozen mode enforcement.
+
+### 31.4 End-to-End (E2E) Tests
+- **Code Project:** Submit a goal to implement a Python REST endpoint. Verify: DAG decomposition → test generation → implementation candidates → test execution → evaluation → Git commit → artifact accepted. All without user intervention.
+- **Daydreaming:** Trigger idle state. Verify: memory compaction runs → repository indexed → documentation draft generated → DaydreamLog persisted.
+- **Recovery:** Kill Core Pod mid-job. Restart. Verify: job resumes from last checkpoint → partial artifacts quarantined → no state loss.
+- **Context Swap:** Submit a task requiring a large repository. Verify: Dormant Index generated → LLM issues `context_swap` → correct chunk loaded byte-for-byte → LLM continues execution.
+- **Feedback Loop:** Reject an artifact with a structured reason. Verify: `CorrectionRecord` created → injected into next job → LLM avoids the identified mistake.
+
+---
+
+## 32. Deployment
+
+Athanor is deployed via a single CLI binary (`athanor`) which:
+
+1. Bootstraps the Host Adapter (OS-level bridge).
+2. Provisions the rootless Podman environment.
+3. Pulls OCI images for the Core Pod and Job Pod base images.
+4. Runs `athanor doctor` to validate hardware and prerequisites.
+5. Starts the Core Pod.
+6. Opens the local UI (or provides CLI interface for headless deployments).
+
+**Headless deployment:**
+- Host Adapter is optional.
+- Core Pod runs directly via systemd or launchd.
+- UI is accessed via localhost port forwarding (SSH).
+
+**Update process:**
+- Pull new OCI image.
+- Run migrations (forward-only, embedded in binary).
+- Restart Core Pod.
+- Resume from checkpoint.

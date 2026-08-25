@@ -5,6 +5,14 @@
 /spikes/**/*.db
 /spikes/**/*.exe
 
+# Athanor runtime state (never committed)
+/state/
+/backups/
+/workspace/
+*.db
+*.db-wal
+*.db-shm
+
 # Keep spike source code and docs
 !/spikes/**/*.go
 !/spikes/**/go.mod

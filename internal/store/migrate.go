@@ -1,0 +1,190 @@
+// Forward-only migration runner (ARCHITECTURE §23.5).
+//
+// Each migration executes inside its own transaction together with its
+// schema_migrations bookkeeping row, so a failing migration rolls back
+// completely — including kill -9 mid-migration, which SQLite recovers via
+// WAL rollback journaling — leaving the prior version intact and usable.
+// A rerun is always safe and becomes a no-op once all migrations are
+// applied. Rollback is by restoring a backup only; there are no down
+// migrations.
+package store
+
+import (
+	"database/sql"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// schemaMigrations records applied migration versions.
+const schemaMigrations = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+	version    INTEGER PRIMARY KEY,
+	name       TEXT NOT NULL,
+	applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);`
+
+// Migrate applies every pending .sql migration in fsys (files named
+// NNNN_description.sql) in lexical order. Before the first pending
+// migration runs, a backup of the current database is written into
+// backupDir (created if needed). An empty backupDir disables backups.
+func Migrate(db *sql.DB, fsys fs.FS, backupDir string) error {
+	if _, err := db.Exec(schemaMigrations); err != nil {
+		return fmt.Errorf("ensuring schema_migrations: %w", err)
+	}
+	pending, err := pendingMigrations(db, fsys)
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil // rerun is a no-op
+	}
+
+	current := currentVersion(db)
+	if backupDir != "" {
+		backupPath, err := Backup(db, backupDir, current)
+		if err != nil {
+			return fmt.Errorf("backup before migrate: %w", err)
+		}
+		slog.Info("pre-migrate backup written", "path", backupPath, "from_version", current)
+	}
+
+	for _, m := range pending {
+		if err := applyOne(db, m); err != nil {
+			return fmt.Errorf("migration %04d_%s failed (database remains at version %d): %w",
+				m.version, m.name, currentVersion(db), err)
+		}
+		slog.Info("migration applied", "version", m.version, "name", m.name)
+	}
+	return nil
+}
+
+// CurrentVersion reports the highest applied schema version (0 if none).
+func currentVersion(db *sql.DB) int {
+	var v int
+	err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// Version returns the schema version of the store's database.
+func (s *Store) Version() int { return currentVersion(s.db) }
+
+// migration is one parsed .sql file.
+type migration struct {
+	version int
+	name    string
+	body    string
+	path    string
+}
+
+// pendingMigrations lists not-yet-applied migrations in version order and
+// verifies the migration set is consistent with the recorded history.
+func pendingMigrations(db *sql.DB, fsys fs.FS) ([]migration, error) {
+	applied := map[int]bool{}
+	rows, err := db.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("reading applied versions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		applied[v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	entries, err := fs.Glob(fsys, "*.sql")
+	if err != nil {
+		return nil, fmt.Errorf("listing embedded migrations: %w", err)
+	}
+	sort.Strings(entries)
+
+	var out []migration
+	seen := map[int]string{}
+	for _, entry := range entries {
+		m, err := readMigration(fsys, entry)
+		if err != nil {
+			return nil, err
+		}
+		if prev, dup := seen[m.version]; dup {
+			return nil, fmt.Errorf("duplicate migration version %d (%q and %q)", m.version, prev, entry)
+		}
+		seen[m.version] = entry
+		if !applied[m.version] {
+			out = append(out, m)
+		}
+		delete(applied, m.version)
+	}
+	if len(applied) > 0 {
+		var versions []string
+		for v := range applied {
+			versions = append(versions, fmt.Sprintf("%04d", v))
+		}
+		sort.Strings(versions)
+		return nil, fmt.Errorf("schema_migrations references versions missing files: %s",
+			strings.Join(versions, ", "))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
+	return out, nil
+}
+
+// readMigration loads and names-checks one NNNN_description.sql file.
+func readMigration(fsys fs.FS, entry string) (migration, error) {
+	base := strings.TrimSuffix(filepath.Base(entry), ".sql")
+	idx := strings.Index(base, "_")
+	if idx != 4 || !allDigits(base[:4]) {
+		return migration{}, fmt.Errorf("migration file %q must be named NNNN_description.sql", entry)
+	}
+	var version int
+	if _, err := fmt.Sscanf(base[:4], "%d", &version); err != nil {
+		return migration{}, fmt.Errorf("migration file %q has bad version prefix: %w", entry, err)
+	}
+	body, err := fs.ReadFile(fsys, entry)
+	if err != nil {
+		return migration{}, fmt.Errorf("reading migration %q: %w", entry, err)
+	}
+	return migration{
+		version: version,
+		name:    base[5:],
+		body:    string(body),
+		path:    entry,
+	}, nil
+}
+
+func allDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+// applyOne executes a single migration atomically with its bookkeeping row.
+func applyOne(db *sql.DB, m migration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(m.body); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
+		m.version, m.name,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

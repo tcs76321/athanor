@@ -8,10 +8,13 @@
 CGO_ENABLED = 1
 export CGO_ENABLED
 
-.PHONY: build test test-race vet tidy clean
+.PHONY: build test test-race vet tidy run clean
 
 build:
 	go build ./...
+
+run:
+	go run ./cmd/athanor
 
 test:
 	go test ./...

@@ -1,5 +1,12 @@
 // Package power provides resource management for the Athanor daemon,
-// throttling resource usage based on user activity state.
+// throttling resource usage based on user activity state
+// (ARCHITECTURE §24: autonomous background work when the user is idle
+// and AC-powered; deferential throttling while the user is active).
+//
+// The profile abstraction is intentionally separate from the battery/
+// AC policy in §24 — this package answers "how much background work is
+// allowed right now?", which the job scheduler consults before starting
+// jobs or Daydreaming work.
 package power
 
 import (
@@ -12,19 +19,20 @@ type Profile string
 
 const (
 	// ProfileAutonomous - High resource utilization.
-	// Multiple concurrent VMs allowed. Background "dreaming" (memory consolidation/indexing) is ACTIVE.
+	// Multiple concurrent jobs allowed; Daydreaming (memory
+	// consolidation/indexing, §17) is ACTIVE.
 	ProfileAutonomous Profile = "autonomous"
 
 	// ProfileInteractive - Deferential resource utilization.
-	// Max 1 concurrent VM. Background "dreaming" is PAUSED. CPU quotas are reduced.
+	// Max 1 concurrent job. Daydreaming is PAUSED. CPU quota is reduced.
 	ProfileInteractive Profile = "interactive"
 )
 
 // Limits defines the resource limits for a given profile.
 type Limits struct {
-	MaxConcurrentVMs int     // Maximum number of concurrent VMs allowed
-	AllowDreaming    bool    // Whether background "dreaming" (memory consolidation/indexing) is enabled
-	CPUQuota         float64 // CPU quota as fraction of total (0.0-1.0)
+	MaxConcurrentJobs int     // Maximum number of concurrent jobs allowed
+	AllowDaydreaming  bool    // Whether Daydreaming (§17) is enabled
+	CPUQuota          float64 // CPU quota as fraction of total (0.0-1.0)
 }
 
 // OSWatcher defines the interface for OS-level power assertions.
@@ -74,27 +82,29 @@ func NewPowerManager(watcher OSWatcher) *PowerManager {
 	return pm
 }
 
-// profileLimits returns the Limits for a given profile.
+// profileLimits returns the Limits for a given profile. Unknown profiles
+// resolve to the conservative interactive-equivalent limits — the package
+// fails toward less background work, never more (§24 spirit).
 func profileLimits(p Profile) Limits {
 	switch p {
 	case ProfileAutonomous:
 		return Limits{
-			MaxConcurrentVMs: 4,
-			AllowDreaming:    true,
-			CPUQuota:         1.0,
+			MaxConcurrentJobs: 4,
+			AllowDaydreaming:  true,
+			CPUQuota:          1.0,
 		}
 	case ProfileInteractive:
 		return Limits{
-			MaxConcurrentVMs: 1,
-			AllowDreaming:    false,
-			CPUQuota:         0.3,
+			MaxConcurrentJobs: 1,
+			AllowDaydreaming:  false,
+			CPUQuota:          0.3,
 		}
 	default:
-		// Safe fallback
+		// Safe fallback: conservative limits for unknown profiles.
 		return Limits{
-			MaxConcurrentVMs: 1,
-			AllowDreaming:    false,
-			CPUQuota:         0.3,
+			MaxConcurrentJobs: 1,
+			AllowDaydreaming:  false,
+			CPUQuota:          0.3,
 		}
 	}
 }

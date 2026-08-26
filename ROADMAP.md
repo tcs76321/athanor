@@ -9,9 +9,9 @@
 | Milestone | State |
 |---|---|
 | TASK-000 SQLite + sqlite-vec spike | ✅ Done (findings: [docs/sqlite-setup.md](docs/sqlite-setup.md)) |
-| Power manager draft (`internal/power`) | 🚧 Drafted; VM-era naming to be corrected at M7-T1 |
+| Power manager draft (`internal/power`) | ✅ Aligned with ARCHITECTURE §24 naming (jobs, not VMs) and fully unit-tested |
 | M0 Foundations | ✅ Done — T1–T8 complete (module, config, logging, store, migrations, EventLog API, `/healthz`, CI) + enum-normalization migration 0003 ([ADR-0005](docs/adr/0005-canonical-enum-values.md)). Gate G0 passed: kill -9 crash/restart verified, migrations forward-only and idempotent |
-| M1 Walking Skeleton | ⬜ Next |
+| M1 Walking Skeleton | 🚧 In progress |
 | M2 Container Spine | ⬜ Not started |
 | M3 Dialectical Loop v1 | ⬜ Not started |
 | M4 Airlock & Gateway | ⬜ Not started |
@@ -239,7 +239,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 
 | ID | Task | Size | Type | Acceptance Criteria | Refs |
 |---|---|---|---|---|---|
-| M7-T1 | Power/idle integration: wire `internal/power` profiles (rename VM-era terms to pods), AC/battery gating, sleep→flush+pause, wake→resume-from-checkpoint | M | code | Sleep/wake cycle mid-job resumes correctly; battery below threshold pauses with state flushed | §24 |
+| M7-T1 | Power/idle integration: wire `internal/power` profiles (naming already §24-aligned and tested), AC/battery gating, sleep→flush+pause, wake→resume-from-checkpoint | M | code | Sleep/wake cycle mid-job resumes correctly; battery below threshold pauses with state flushed | §24 |
 | M7-T2 | Daydreaming engine: five actions (§17.1 — memory consolidation, repo exploration, proactive documentation, feedback review, strategy mining [strategy mining depends on the records produced by M6-T10/T11]; `skill_refinement` is deferred with the skills runtime, see backlog) with constraints (priority yield, budgets, draft-only output, no battery) + `DaydreamLog` | L | code | Daydream job yields within seconds when real work arrives; outputs all draft; log persisted per session | §17 |
 | M7-T3 | Alarms: categories and levels per §22.3, wired to their triggers (loop, resource, quality >50%, stuck, hallucination, budget, security, drift, self-modification) | M | code | Each alarm category has a triggered test; critical alarms freeze the system | §22 |
 | M7-T4 | Backups: scheduled local backups, retention, restore drill documented and tested | S | code | Restore from backup produces working state; retention prunes correctly | §23.4 |

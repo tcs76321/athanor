@@ -1,0 +1,146 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// Event levels (events.level CHECK, migration 0001).
+type EventLevel string
+
+const (
+	EventDebug EventLevel = "debug"
+	EventInfo  EventLevel = "info"
+	EventWarn  EventLevel = "warn"
+	EventError EventLevel = "error"
+)
+
+// Event is one append-only audit entry (ARCHITECTURE §28). Category uses
+// the closed §28.1 set; membership is enforced where the set is owned
+// (config validation, logging.Manager) — the store accepts any non-empty
+// category so it never needs to depend on configuration.
+type Event struct {
+	Category  string
+	Level     EventLevel // "" defaults to EventInfo
+	ProjectID string     // optional
+	JobID     string     // optional
+	Data      map[string]any
+}
+
+// EventRecord is a persisted event as returned by QueryEvents.
+type EventRecord struct {
+	ID        int64
+	TS        time.Time
+	Category  string
+	Level     string
+	ProjectID string
+	JobID     string
+	DataJSON  string
+}
+
+// AppendEvent inserts exactly one row into the append-only events table.
+// There is deliberately no update or delete path anywhere on this type;
+// the database triggers added in migration 0001 reject such statements
+// regardless.
+func (s *Store) AppendEvent(ctx context.Context, e Event) (int64, error) {
+	if e.Category == "" {
+		return 0, fmt.Errorf("event category must not be empty")
+	}
+	level := e.Level
+	if level == "" {
+		level = EventInfo
+	}
+	switch level {
+	case EventDebug, EventInfo, EventWarn, EventError:
+	default:
+		return 0, fmt.Errorf("invalid event level %q (want debug|info|warn|error)", level)
+	}
+
+	data := []byte("{}")
+	if len(e.Data) > 0 {
+		raw, err := json.Marshal(e.Data)
+		if err != nil {
+			return 0, fmt.Errorf("marshalling event data: %w", err)
+		}
+		data = raw
+	}
+
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO events (category, level, project_id, job_id, data_json)
+		 VALUES (?, ?, ?, ?, ?)`,
+		e.Category, string(level), nullIfEmpty(e.ProjectID), nullIfEmpty(e.JobID), string(data),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("appending event: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("reading event id: %w", err)
+	}
+	return id, nil
+}
+
+// EventFilter selects events for QueryEvents. Empty fields match anything;
+// Limit <= 0 means no limit.
+type EventFilter struct {
+	Category  string
+	ProjectID string
+	JobID     string
+	Limit     int
+}
+
+// QueryEvents returns matching events ordered by insertion id ascending.
+func (s *Store) QueryEvents(ctx context.Context, f EventFilter) ([]EventRecord, error) {
+	q := `SELECT id, ts, category, level, COALESCE(project_id, ''), COALESCE(job_id, ''), data_json
+	      FROM events WHERE 1=1`
+	args := []any{}
+	if f.Category != "" {
+		q += ` AND category = ?`
+		args = append(args, f.Category)
+	}
+	if f.ProjectID != "" {
+		q += ` AND project_id = ?`
+		args = append(args, f.ProjectID)
+	}
+	if f.JobID != "" {
+		q += ` AND job_id = ?`
+		args = append(args, f.JobID)
+	}
+	q += ` ORDER BY id ASC`
+	if f.Limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, f.Limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []EventRecord
+	for rows.Next() {
+		var r EventRecord
+		var ts string
+		if err := rows.Scan(&r.ID, &ts, &r.Category, &r.Level, &r.ProjectID, &r.JobID, &r.DataJSON); err != nil {
+			return nil, fmt.Errorf("scanning event: %w", err)
+		}
+		parsed, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return nil, fmt.Errorf("parsing event timestamp %q: %w", ts, err)
+		}
+		r.TS = parsed
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// nullIfEmpty maps Go empty strings to SQL NULL for optional columns.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

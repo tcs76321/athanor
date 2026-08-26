@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -190,5 +192,71 @@ func TestExplicitFalseHonoredForDefaultTrueFlags(t *testing.T) {
 	}
 	if Val(cfg.Backup.Auto, true) {
 		t.Error("explicit backup.auto=false was overridden by default")
+	}
+}
+
+func TestDefaultIsValid(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatalf("Default() err = %v, want nil", err)
+	}
+	if cfg.Version != CurrentVersion {
+		t.Errorf("Version = %d, want %d", cfg.Version, CurrentVersion)
+	}
+	if cfg.Inference.DefaultBackend != "ollama" {
+		t.Errorf("DefaultBackend = %q, want ollama", cfg.Inference.DefaultBackend)
+	}
+	if cfg.SourcePath != "" {
+		t.Errorf("SourcePath = %q, want empty (no file involved)", cfg.SourcePath)
+	}
+}
+
+// TestDefaultEqualsEmptySpecifiedConfig proves Default() is exactly what
+// Load produces for a config file that specifies nothing but a valid
+// version — the fallback and the file path converge on one configuration.
+func TestDefaultEqualsEmptySpecifiedConfig(t *testing.T) {
+	fromFile, err := Parse([]byte("version: 2\n"))
+	if err != nil {
+		t.Fatalf("Parse(minimal): %v", err)
+	}
+	def, err := Default()
+	if err != nil {
+		t.Fatalf("Default(): %v", err)
+	}
+	if !reflect.DeepEqual(def, fromFile) {
+		t.Errorf("Default() differs from Parse(minimal):\ndef:   %+v\nfile:  %+v", def, fromFile)
+	}
+}
+
+// TestExampleConfigMatchesDefaults keeps config.example.yaml honest: the
+// shipped example must always parse and equal the built-in defaults, so
+// copying it to config.yaml is a documented no-op.
+func TestExampleConfigMatchesDefaults(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("reading config.example.yaml: %v (file must ship with the repo)", err)
+	}
+	example, err := Parse(data)
+	if err != nil {
+		t.Fatalf("config.example.yaml does not parse: %v", err)
+	}
+	def, err := Default()
+	if err != nil {
+		t.Fatalf("Default(): %v", err)
+	}
+	// Normalize nil vs empty slices: `allow_list: []` in YAML decodes to an
+	// empty slice while an omitted field stays nil — semantically identical.
+	for _, c := range []*Config{example, def} {
+		if len(c.Network.AllowList) == 0 {
+			c.Network.AllowList = nil
+		}
+		if len(c.Logging.Categories) == 0 {
+			c.Logging.Categories = nil
+		}
+	}
+	if !reflect.DeepEqual(example, def) {
+		exJSON, _ := json.MarshalIndent(example, "", "  ")
+		defJSON, _ := json.MarshalIndent(def, "", "  ")
+		t.Errorf("config.example.yaml drifted from built-in defaults — update the example (or defaults) so they match\nexample:\n%s\ndefaults:\n%s", exJSON, defJSON)
 	}
 }

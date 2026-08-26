@@ -15,6 +15,9 @@
 *.db-wal
 *.db-shm
 
+# Local daemon configuration (copy config.example.yaml to start)
+/config.yaml
+
 # Keep spike source code and docs
 !/spikes/**/*.go
 !/spikes/**/go.mod

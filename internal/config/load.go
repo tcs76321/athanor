@@ -41,6 +41,23 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// Default returns the fully-defaulted configuration (the same result Load
+// produces for a config file that specifies nothing). It exists so the
+// daemon can boot on a fresh clone before the user has written a
+// config.yaml — explicit absence falls back to defaults with a notice,
+// while a present-but-invalid file still fails loudly.
+func Default() (*Config, error) {
+	cfg := &Config{}
+	if err := validateRaw(cfg); err != nil {
+		return nil, fmt.Errorf("default config invalid (bug in defaults.go): %w", err)
+	}
+	applyDefaults(cfg)
+	if err := validateCross(cfg); err != nil {
+		return nil, fmt.Errorf("default config invalid (bug in defaults.go): %w", err)
+	}
+	return cfg, nil
+}
+
 // Parse decodes raw YAML bytes, applies defaults for omitted optional
 // fields, and validates the result.
 func Parse(data []byte) (*Config, error) {

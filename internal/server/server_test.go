@@ -84,9 +84,9 @@ func TestLocalhostAddr(t *testing.T) {
 		fails bool
 	}{
 		{in: "127.0.0.1:7420", want: "127.0.0.1:7420"},
-		{in: ":7420", want: "127.0.0.1:7420"},          // bare port → loopback
-		{in: "0.0.0.0:8080", want: "127.0.0.1:8080"},   // wildcard → loopback
-		{in: "[::]:8080", want: "127.0.0.1:8080"},      // IPv6 wildcard → loopback
+		{in: ":7420", want: "127.0.0.1:7420"},        // bare port → loopback
+		{in: "0.0.0.0:8080", want: "127.0.0.1:8080"}, // wildcard → loopback
+		{in: "[::]:8080", want: "127.0.0.1:8080"},    // IPv6 wildcard → loopback
 		{in: "localhost:80", want: "localhost:80"},
 		{in: "::1:80", fails: true}, // ambiguous without brackets is rejected by SplitHostPort
 		{in: "192.168.1.5:80", fails: true},

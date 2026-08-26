@@ -26,6 +26,8 @@ make run          # equivalent to: go run ./cmd/athanor
 
 Flags: `-config config.yaml` · `-addr 127.0.0.1:7420` · `-state-dir state`. The HTTP surface binds **loopback only** (ARCHITECTURE §21.8); non-loopback addresses are rejected at startup. Check `http://127.0.0.1:7420/healthz` for `{status, version, uptime}`. Boot order is fixed: config → logging → store → migrations → serve; SIGINT/SIGTERM triggers graceful shutdown, and every start/stop is recorded in the append-only event log.
 
+**No config file yet?** The daemon boots on built-in defaults and logs a notice — only *absence* falls back; a present-but-invalid `config.yaml` still fails loudly with a specific error. `config.example.yaml` in the repo root documents every option with its default value (a test enforces that the example always matches the built-in defaults, so copying it is a no-op starting point).
+
 ## Repository layout
 
 | Path | Role |

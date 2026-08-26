@@ -73,6 +73,15 @@ Full topology, isolation rules, and every subsystem are documented in [`ARCHITEC
 
 ### Install & First Run
 
+> **Note:** Athanor is pre-MVP. The commands below are the target experience (M7). Today you run the daemon directly from a clone — see [DEVELOPMENT.md](DEVELOPMENT.md):
+
+```bash
+make run                       # boots on built-in defaults; config.yaml optional
+curl http://127.0.0.1:7420/healthz
+```
+
+The eventual flow:
+
 ```bash
 # 1. Validate your hardware and environment (proposes fixes where possible)
 athanor doctor
@@ -106,7 +115,7 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-Pre-MVP. **M0 Foundations is complete** (Gate G0 passed): Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations (incl. enum-normalization migration 0003, [ADR-0005](docs/adr/0005-canonical-enum-values.md)), the append-only EventLog API, a runnable daemon serving `/healthz` on loopback, and CI (vet + test-race + lint). Crash recovery verified: kill -9 mid-run leaves a usable database and restarts cleanly. The implementation plan lives in [`ROADMAP.md`](ROADMAP.md); next up is **M1 — Walking Skeleton**.
+Pre-MVP. **M0 Foundations is complete** (Gate G0 passed): Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations (incl. enum-normalization migration 0003, [ADR-0005](docs/adr/0005-canonical-enum-values.md)), the append-only EventLog API, a runnable daemon serving `/healthz` on loopback, and CI (vet + test-race + lint). Crash recovery verified: kill -9 mid-run leaves a usable database and restarts cleanly. The daemon boots on built-in defaults when no `config.yaml` exists (see `config.example.yaml`). The implementation plan lives in [`ROADMAP.md`](ROADMAP.md); currently in progress: **M1 — Walking Skeleton**.
 
 ## Documentation
 

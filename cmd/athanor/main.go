@@ -1,8 +1,9 @@
 // Command athanor is the daemon entry point.
 //
-// Boot sequence (M0-T7): load config → init logging → open store → run
-// migrations → serve /healthz on loopback → graceful shutdown on
-// SIGINT/SIGTERM. Later milestones wire subsystems into this order.
+// Boot sequence (M0-T7): load config (falling back to built-in defaults
+// when the file is absent) → init logging → open store → run migrations
+// → serve /healthz on loopback → graceful shutdown on SIGINT/SIGTERM.
+// Later milestones wire subsystems into this order.
 package main
 
 import (
@@ -30,6 +31,24 @@ var version = "0.0.0-dev"
 
 const shutdownTimeout = 10 * time.Second
 
+// loadConfig resolves the daemon configuration. A missing config file is
+// not an error on a fresh clone: the daemon falls back to the built-in
+// defaults (M1-T7 acceptance: fresh clone → running daemon, no manual
+// steps). A file that exists but is malformed or invalid still fails
+// loudly — only explicit absence falls back.
+func loadConfig(path string) (*config.Config, error) {
+	cfg, err := config.Load(path)
+	if errors.Is(err, config.ErrFileNotFound) {
+		def, derr := config.Default()
+		if derr != nil {
+			return nil, derr
+		}
+		fmt.Printf("athanor: no config at %s — using built-in defaults (see config.example.yaml)\n", path)
+		return def, nil
+	}
+	return cfg, err
+}
+
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to config.yaml")
 	addr := flag.String("addr", "127.0.0.1:7420", "HTTP listen address (loopback only, §21.8)")
@@ -50,7 +69,7 @@ func main() {
 
 // run boots the daemon and blocks until an OS signal or server failure.
 func run(configPath, addr, stateDir string) error {
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
@@ -127,4 +146,3 @@ func run(configPath, addr, stateDir string) error {
 	}
 	return nil
 }
-

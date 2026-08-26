@@ -1,0 +1,145 @@
+# Athanor example configuration.
+#
+# This mirrors the complete reference config in ARCHITECTURE.md §29. Every
+# value below equals the built-in default, so copying this file to
+# config.yaml changes nothing — edit only what you need and delete the rest;
+# omitted fields fall back to the same defaults.
+#
+# Notes:
+# - Durations must be quoted strings ("5m", "120s", "1h30m").
+# - Unknown keys are rejected (strict parsing).
+# - If config.yaml is absent, the daemon boots on these defaults and logs a
+#   notice; a present-but-invalid config still fails loudly.
+
+version: 2
+
+agent:
+  active_hours: "00:00-24:00"
+  idle_threshold: "5m"
+  max_proactive_tasks_per_day: 10
+
+power:
+  require_ac_for_deep_work: true
+  battery_pause_threshold_percent: 20
+  idle_resume_after: "5m"
+  allow_battery_override: false
+  pause_on_sleep: true
+  resume_on_wake: true
+  daydream_on_idle: true
+  daydream_max_concurrent: 2
+  daydream_max_wall_time_minutes: 30
+
+inference:
+  default_backend: ollama
+  ollama_url: "http://host.containers.internal:11434"
+  cloud_enabled: false
+  cloud_requires_approval: true
+
+# Models assigned to functional roles (§12). security must stay at
+# temperature 0.0 — evaluation and compaction are deterministic.
+personas:
+  wide:
+    model: "qwen2.5:7b"
+    context_target: 65536
+    temperature: 0.7
+  tall:
+    model: "qwen2.5-coder:32b"
+    context_target: 16384
+    temperature: 0.2
+  main:
+    model: "mistral-nemo:12b"
+    context_target: 32768
+    temperature: 0.4
+  security:
+    model: "phi3:3.8b"
+    context_target: 8192
+    temperature: 0.0
+  alternative:
+    model: "llama3.1:8b"
+    context_target: 32768
+    temperature: 0.8
+
+context_engine:
+  # Floors are role-scoped working-set requirements, not per-task
+  # constants (§12.6, ADR-0002).
+  coding_floor: 32768
+  research_floor: 32768
+  document_floor: 16384
+  simple_floor: 8192
+  compaction_temperature: 0.0   # invariant: always 0.0 (§10.3)
+  enable_lossless_swapping: true
+  kv_cache_warning_threshold: 0.85
+  kv_cache_critical_threshold: 0.95
+
+execution:
+  divergence_candidates: 3
+  max_hard_task_variations: 10
+  judge_persona: security
+  require_tests_for_code: true
+  require_documentation_for_code: true
+  compare_before_accept: true
+  min_judge_confidence: 0.7
+  # Wall-time budgets per Dialectical phase (§13); "default" covers phases
+  # without a specific entry.
+  phase_wall_time_budgets:
+    planning: "120s"
+    evaluating: "600s"        # must accommodate Job Pod boot + test suite
+    default: "300s"
+
+strategy_analysis:
+  enabled: true
+  min_cohort_size: 20
+  min_accept_rate_delta: 0.15
+  auto_promote: false            # promote conservative insights without HITL
+  max_active_insights: 10
+  insight_expiry_days: 90
+  strategy_notes_in_prompts: true
+
+limits:
+  max_concurrent_jobs: 2
+  max_concurrent_llm_calls: 1
+  max_concurrent_fetches: 5
+  max_tasks_per_hour: 20
+  max_total_recoveries_per_job: 8
+
+recovery:
+  max_tool_call_retries: 2
+  max_loop_interventions: 1
+  max_context_compactions: 3
+
+network:
+  default_policy: deny           # default-deny; allow_list opens exceptions
+  allow_list: []
+  rate_limit_per_minute: 30
+  max_response_bytes: 10485760
+  reader_mode_default: true
+  browser_mode_requires_approval: true
+
+security:
+  scan_ingress_files: true
+  scan_egress_files: true
+  prompt_injection_scan: true
+  quarantine_suspicious_files: true
+
+backup:
+  auto: true
+  schedule: "0 3 * * *"
+  max_local_backups: 10
+  include_workspace_metadata: true
+
+logging:
+  level: info
+  categories:
+    - jobs
+    - recovery
+    - alarms
+    - airlock
+    - network
+    - podman
+    - inference
+    - feedback
+    - strategy
+    - context
+    - daydream
+    - power
+    - backup

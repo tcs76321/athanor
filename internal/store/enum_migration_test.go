@@ -2,36 +2,12 @@ package store
 
 import (
 	"context"
-	"io/fs"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/tcs76321/athanor/migrations"
 )
-
-// migrationsExcept0003 builds a filesystem of every embedded migration
-// except 0003, simulating a v2 database for upgrade testing.
-func migrationsExcept0003(t *testing.T) fstest.MapFS {
-	t.Helper()
-	entries, err := fs.Glob(migrations.FS, "*.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := fstest.MapFS{}
-	for _, e := range entries {
-		if strings.HasPrefix(e, "0003") {
-			continue
-		}
-		data, err := fs.ReadFile(migrations.FS, e)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out[e] = &fstest.MapFile{Data: data}
-	}
-	return out
-}
 
 // seedV2Rows creates project/task/job parents plus rows carrying pre-0003
 // enum values in corrections and hitl_requests.
@@ -64,7 +40,7 @@ func TestCanonicalEnumMigration(t *testing.T) {
 	db := s.DB()
 
 	// Build v2 state and prove the old constraints reject canonical values.
-	if err := Migrate(db, migrationsExcept0003(t), ""); err != nil {
+	if err := Migrate(db, migrationsExcept(t, "0003", "0004"), ""); err != nil {
 		t.Fatalf("migrating to v2: %v", err)
 	}
 	if got := VersionOf(t, db); got != 2 {
@@ -83,12 +59,12 @@ func TestCanonicalEnumMigration(t *testing.T) {
 		}
 	}
 
-	// Apply 0003 on top.
+	// Apply 0003 (and 0004, which now follows it) on top.
 	if err := Migrate(db, migrations.FS, t.TempDir()); err != nil {
 		t.Fatalf("applying 0003: %v", err)
 	}
-	if got := VersionOf(t, db); got != 3 {
-		t.Fatalf("version = %d after 0003, want 3", got)
+	if got := VersionOf(t, db); got != 4 {
+		t.Fatalf("version = %d after full migrate, want 4", got)
 	}
 
 	// Severity remapping is correct.

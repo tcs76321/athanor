@@ -171,7 +171,21 @@ func allDigits(s string) bool {
 }
 
 // applyOne executes a single migration atomically with its bookkeeping row.
+//
+// SQLite's documented table-rebuild procedure (sqlite.org/lang_altertable,
+// §7ff) requires foreign key enforcement to be OFF while a migration runs —
+// PRAGMA foreign_keys is a no-op inside a transaction, so it is toggled
+// around it. Safety is preserved by an explicit foreign_key_check gate
+// inside the transaction: a migration that leaves referential integrity
+// broken fails and rolls back like any other failing statement.
 func applyOne(db *sql.DB, m migration) error {
+	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return fmt.Errorf("disabling foreign keys for migration: %w", err)
+	}
+	// Best-effort re-enable on every exit path; a second call after a
+	// successful Commit is harmless.
+	defer func() { _, _ = db.Exec(`PRAGMA foreign_keys = ON`) }()
+
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
@@ -181,6 +195,9 @@ func applyOne(db *sql.DB, m migration) error {
 	if _, err := tx.Exec(m.body); err != nil {
 		return err
 	}
+	if err := checkForeignKeys(tx, m); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
 		m.version, m.name,
@@ -188,4 +205,35 @@ func applyOne(db *sql.DB, m migration) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// checkForeignKeys is the integrity gate for migrations: it fails (and
+// thereby rolls back) any migration whose statements left a child row
+// without its parent. Migrations may therefore rebuild parent tables
+// freely; they may not commit broken references.
+func checkForeignKeys(tx *sql.Tx, m migration) error {
+	rows, err := tx.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		return fmt.Errorf("checking foreign keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var violations []string
+	for rows.Next() {
+		var table, parent string
+		var rowid any
+		var fkid int
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			return fmt.Errorf("scanning foreign_key_check: %w", err)
+		}
+		violations = append(violations, fmt.Sprintf("%s row %v → %s", table, rowid, parent))
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating foreign_key_check: %w", err)
+	}
+	if len(violations) > 0 {
+		return fmt.Errorf("migration %04d_%s breaks referential integrity: %s",
+			m.version, m.name, strings.Join(violations, "; "))
+	}
+	return nil
 }

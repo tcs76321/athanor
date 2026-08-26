@@ -92,6 +92,68 @@ func TestDuplicateMigrationVersionsRejected(t *testing.T) {
 	}
 }
 
+// TestForeignKeyIntegrityGate proves the runner's migration-time safety
+// net: foreign key enforcement is relaxed while a migration runs (so
+// parent tables can be rebuilt per SQLite's documented procedure), but a
+// migration that ends with broken references fails, rolls back, and
+// leaves FK enforcement re-enabled for normal operation.
+func TestForeignKeyIntegrityGate(t *testing.T) {
+	s, _ := openTemp(t)
+	db := s.DB()
+
+	good := fstest.MapFS{
+		"0001_parents.sql": &fstest.MapFile{Data: []byte(
+			"CREATE TABLE parents (id TEXT PRIMARY KEY);\n" +
+				"CREATE TABLE children (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parents(id));\n" +
+				"INSERT INTO parents (id) VALUES ('p1');\n" +
+				"INSERT INTO children (id, parent_id) VALUES ('c1','p1');")},
+	}
+	if err := Migrate(db, good, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// This migration drops the parent while a child row still references
+	// it — referential integrity is broken, so it must fail and roll back.
+	broken := fstest.MapFS{
+		"0001_parents.sql": good["0001_parents.sql"],
+		"0002_orphan.sql":  &fstest.MapFile{Data: []byte("DROP TABLE parents;")},
+	}
+	err := Migrate(db, broken, "")
+	if err == nil || !strings.Contains(err.Error(), "referential integrity") {
+		t.Fatalf("err = %v, want referential integrity failure", err)
+	}
+	if got := VersionOf(t, db); got != 1 {
+		t.Fatalf("version = %d after rejected migration, want 1", got)
+	}
+
+	// FK enforcement is back on for normal writes.
+	if _, err := db.Exec(
+		`INSERT INTO children (id, parent_id) VALUES ('c2','missing')`,
+	); err == nil {
+		t.Error("FK enforcement not re-enabled after failed migration")
+	}
+
+	// A migration that rebuilds the parent correctly still succeeds.
+	rebuild := fstest.MapFS{
+		"0001_parents.sql": good["0001_parents.sql"],
+		"0003_rebuild.sql": &fstest.MapFile{Data: []byte(
+			"CREATE TABLE parents_new (id TEXT PRIMARY KEY);\n" +
+				"INSERT INTO parents_new SELECT id FROM parents;\n" +
+				"DROP TABLE parents;\n" +
+				"ALTER TABLE parents_new RENAME TO parents;")},
+	}
+	if err := Migrate(db, rebuild, ""); err != nil {
+		t.Fatalf("legitimate parent rebuild rejected: %v", err)
+	}
+	if got := VersionOf(t, db); got != 3 {
+		t.Fatalf("version = %d after rebuild, want 3", got)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM children`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("children survived = %d (err=%v), want 1", n, err)
+	}
+}
+
 func TestBadMigrationNamesRejected(t *testing.T) {
 	s, _ := openTemp(t)
 	fs := fstest.MapFS{

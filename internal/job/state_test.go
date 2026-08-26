@@ -1,0 +1,136 @@
+package job
+
+import (
+	"errors"
+	"testing"
+)
+
+// TestLegalTransitions pins the exact M1 edge set (§8.2 + ADR-0001).
+func TestLegalTransitions(t *testing.T) {
+	legal := []struct{ from, to State }{
+		{StateQueued, StateContextBuilding},
+		{StateQueued, StateCancelled},
+		{StateContextBuilding, StatePlanning},
+		{StateContextBuilding, StatePaused},
+		{StateContextBuilding, StateFailed},
+		{StateContextBuilding, StateCancelled},
+		{StatePlanning, StateDiverging},
+		{StatePlanning, StatePaused},
+		{StatePlanning, StateFailed},
+		{StatePlanning, StateCancelled},
+		{StateDiverging, StateSynthesizing}, // → evaluating arrives in M3
+		{StateDiverging, StatePaused},
+		{StateDiverging, StateFailed},
+		{StateDiverging, StateCancelled},
+		{StateSynthesizing, StateComparing},
+		{StateSynthesizing, StatePaused},
+		{StateSynthesizing, StateFailed},
+		{StateSynthesizing, StateCancelled},
+		{StateComparing, StateCompleted},
+		{StateComparing, StateFailed},
+		{StateComparing, StatePaused},
+		{StateComparing, StateCancelled},
+		{StatePaused, StatePlanning}, // legal shape; data rule in repo
+		{StatePaused, StateCancelled},
+	}
+	for _, tc := range legal {
+		if !CanTransition(tc.from, tc.to) {
+			t.Errorf("CanTransition(%s → %s) = false, want legal M1 edge", tc.from, tc.to)
+		}
+		if err := ValidateTransition(tc.from, tc.to); err != nil {
+			t.Errorf("ValidateTransition(%s → %s) = %v, want nil", tc.from, tc.to, err)
+		}
+	}
+}
+
+// TestIllegalTransitions covers the non-edges: skipped phases, backwards
+// moves, M3/M6 edges that do not exist yet (ADR-0001), and self-loops.
+func TestIllegalTransitions(t *testing.T) {
+	illegal := []struct{ from, to State }{
+		{StateQueued, StatePlanning},  // skip context_building
+		{StateQueued, StateDiverging}, // skip two phases
+		{StateQueued, StateCompleted}, // work cannot teleport
+		{StateQueued, StatePaused},    // queued work just never starts
+		{StateQueued, StateFailed},
+		{StateContextBuilding, StateDiverging}, // skip planning
+		{StatePlanning, StateSynthesizing},     // skip diverging
+		{StatePlanning, StateComparing},
+		{StateDiverging, StateComparing},    // skip synthesizing
+		{StateDiverging, StateEvaluating},   // arrives in M3 (ADR-0001)
+		{StateSynthesizing, StateCompleted}, // comparing is mandatory
+		{StateComparing, StateSynthesizing}, // no backwards edges
+		{StateCompleted, StateQueued},       // terminal states are final
+		{StateFailed, StateQueued},
+		{StateFailed, StateComparing},
+		{StateCancelled, StateQueued},
+		{StateCompleted, StateCompleted}, // self-loops
+		{StatePaused, StatePaused},
+		{StatePlanning, StatePlanning},
+		{StatePaused, StateAwaitingApproval}, // M6 edge does not exist yet
+		{StateComparing, StateReflecting},    // M3 edge does not exist yet
+		{"bogus", StatePlanning},             // unknown states
+		{StatePlanning, "bogus"},
+	}
+	for _, tc := range illegal {
+		if CanTransition(tc.from, tc.to) {
+			t.Errorf("CanTransition(%s → %s) = true, want illegal", tc.from, tc.to)
+		}
+		err := ValidateTransition(tc.from, tc.to)
+		if err == nil {
+			t.Errorf("ValidateTransition(%s → %s) = nil, want error", tc.from, tc.to)
+			continue
+		}
+		// Unknown states get a different error shape than illegal edges.
+		if !tc.from.Valid() || !tc.to.Valid() {
+			var ite *IllegalTransitionError
+			if errors.As(err, &ite) {
+				t.Errorf("ValidateTransition(%s → %s) = illegal-edge error, want unknown-state error", tc.from, tc.to)
+			}
+		}
+	}
+}
+
+// TestIllegalTransitionErrorNamesStates is the M1-T4 acceptance clause:
+// illegal transitions are rejected *by tests* naming both states.
+func TestIllegalTransitionErrorNamesStates(t *testing.T) {
+	err := ValidateTransition(StateCompleted, StateQueued)
+	var ite *IllegalTransitionError
+	if !errors.As(err, &ite) {
+		t.Fatalf("err = %v (%T), want IllegalTransitionError", err, err)
+	}
+	if ite.From != StateCompleted || ite.To != StateQueued {
+		t.Errorf("error states = %s → %s, want completed → queued", ite.From, ite.To)
+	}
+	want := "illegal job transition completed → queued"
+	if err.Error() != want {
+		t.Errorf("Error() = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestStateTerminal(t *testing.T) {
+	for s, want := range map[State]bool{
+		StateQueued: false, StateContextBuilding: false, StatePlanning: false,
+		StateDiverging: false, StateEvaluating: false, StateReflecting: false,
+		StateSynthesizing: false, StateComparing: false, StateAwaitingApproval: false,
+		StatePaused: false, StateCompleted: true, StateFailed: true, StateCancelled: true,
+	} {
+		if got := s.Terminal(); got != want {
+			t.Errorf("State(%q).Terminal() = %v, want %v", s, got, want)
+		}
+	}
+}
+
+func TestStateValid(t *testing.T) {
+	for _, s := range []State{StateQueued, StateContextBuilding, StatePlanning, StateDiverging,
+		StateEvaluating, StateReflecting, StateSynthesizing, StateComparing,
+		StateAwaitingApproval, StatePaused, StateCompleted, StateFailed, StateCancelled} {
+		if !s.Valid() {
+			t.Errorf("State(%q).Valid() = false, want true", s)
+		}
+	}
+	for _, s := range []State{"", "running", "PAUSED", "queued "} {
+		if s.Valid() {
+			t.Errorf("State(%q).Valid() = true, want false", s)
+		}
+	}
+}

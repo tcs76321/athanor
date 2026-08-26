@@ -1,7 +1,7 @@
 // Package store provides the SQLite persistence substrate for Athanor
 // (ARCHITECTURE §23): WAL pragmas, a forward-only embedded migration
-// runner with backup-before-migrate, and (from M0-T6) the append-only
-// EventLog API.
+// runner with backup-before-migrate (and a foreign-key integrity gate),
+// and (from M0-T6) the append-only EventLog API.
 //
 // Driver choice follows the task-000 spike findings
 // (docs/sqlite-setup.md): mattn/go-sqlite3 with CGO, single connection,

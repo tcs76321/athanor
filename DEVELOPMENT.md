@@ -11,11 +11,20 @@ make build        # CGO_ENABLED=1 go build ./...
 make test         # go test ./...
 make test-race    # go test -race ./...
 make vet          # go vet ./...
+make run          # run the daemon locally
 ```
 
 Don't run bare `go build` / `go test` — they silently drop CGO and fail on the sqlite3 driver. The Makefile sets the flag for you, and CI enforces the same targets.
 
 When FTS5 support is needed, add the build tag: `go build -tags sqlite_fts5 .`
+
+## Running the daemon
+
+```bash
+make run          # equivalent to: go run ./cmd/athanor
+```
+
+Flags: `-config config.yaml` · `-addr 127.0.0.1:7420` · `-state-dir state`. The HTTP surface binds **loopback only** (ARCHITECTURE §21.8); non-loopback addresses are rejected at startup. Check `http://127.0.0.1:7420/healthz` for `{status, version, uptime}`. Boot order is fixed: config → logging → store → migrations → serve; SIGINT/SIGTERM triggers graceful shutdown, and every start/stop is recorded in the append-only event log.
 
 ## Repository layout
 

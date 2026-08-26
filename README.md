@@ -106,7 +106,7 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-Pre-MVP. Completed so far: task-000 SQLite/sqlite-vec Go spike, a power-management draft, and M0-T1 through M0-T5b of Foundations (Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations, and the execution-spine + learning/control schemas). Remaining in M0: EventLog append API, `/healthz`, CI bootstrap. The implementation plan lives in [`ROADMAP.md`](ROADMAP.md).
+Pre-MVP. **M0 Foundations is complete** (Gate G0 passed): Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations (incl. enum-normalization migration 0003, [ADR-0005](docs/adr/0005-canonical-enum-values.md)), the append-only EventLog API, a runnable daemon serving `/healthz` on loopback, and CI (vet + test-race + lint). Crash recovery verified: kill -9 mid-run leaves a usable database and restarts cleanly. The implementation plan lives in [`ROADMAP.md`](ROADMAP.md); next up is **M1 — Walking Skeleton**.
 
 ## Documentation
 

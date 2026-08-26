@@ -73,12 +73,20 @@ Full topology, isolation rules, and every subsystem are documented in [`ARCHITEC
 
 ### Install & First Run
 
-> **Note:** Athanor is pre-MVP. The commands below are the target experience (M7). Today you run the daemon directly from a clone — see [DEVELOPMENT.md](DEVELOPMENT.md):
+> **Note:** Athanor is pre-MVP; the container packaging (`athanor doctor` /
+> `athanor start` below) is the M7 target. Today the daemon runs directly
+> from a clone with a real CLI:
 
 ```bash
-make run                       # boots on built-in defaults; config.yaml optional
-curl http://127.0.0.1:7420/healthz
+make build
+make run                                     # daemon on http://127.0.0.1:7420 (defaults, no config needed)
+./bin/athanor project create -name demo -archetype text -goal "Write a short essay about why local-first software matters."
+./bin/athanor goal submit -project <id> -goal "Summarize it in five bullet points."
+./bin/athanor job watch -job <id>            # streams every phase; ends with the draft artifact
 ```
+
+Full walkthrough (including the kill switch and crash recovery):
+[docs/demo-m1.md](docs/demo-m1.md) — that script is the Gate G1 demo.
 
 The eventual flow:
 
@@ -115,7 +123,7 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-Pre-MVP. **M0 Foundations is complete** (Gate G0 passed): Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations (incl. enum-normalization migration 0003, [ADR-0005](docs/adr/0005-canonical-enum-values.md)), the append-only EventLog API, a runnable daemon serving `/healthz` on loopback, and CI (vet + test-race + lint). Crash recovery verified: kill -9 mid-run leaves a usable database and restarts cleanly. The daemon boots on built-in defaults when no `config.yaml` exists (see `config.example.yaml`). The implementation plan lives in [`ROADMAP.md`](ROADMAP.md); currently in progress: **M1 — Walking Skeleton**.
+Pre-MVP. **M0 Foundations is complete** (Gate G0 passed): Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations (incl. enum-normalization migration 0003, [ADR-0005](docs/adr/0005-canonical-enum-values.md)), the append-only EventLog API, a runnable daemon serving `/healthz` on loopback, and CI (vet + test-race + lint). Crash recovery verified: kill -9 mid-run leaves a usable database and restarts cleanly. The daemon boots on built-in defaults when no `config.yaml` exists (see `config.example.yaml`). **M1 — Walking Skeleton is code-complete** (T1–T7): a goal goes in, an LLM-generated draft artifact comes out, the run survives kill -9 mid-job, the kill switch freezes all new work, and an executable gate test proves no tool-execution capability exists (Gate G1 evidence: [docs/demo-m1.md](docs/demo-m1.md)). M1-T8 (quality probe against a live Ollama) is pending — protocol prepared at [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md). Next: **M2 — Container Spine**.
 
 ## Documentation
 

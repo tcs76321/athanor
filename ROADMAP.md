@@ -11,7 +11,7 @@
 | TASK-000 SQLite + sqlite-vec spike | ✅ Done (findings: [docs/sqlite-setup.md](docs/sqlite-setup.md)) |
 | Power manager draft (`internal/power`) | ✅ Aligned with ARCHITECTURE §24 naming (jobs, not VMs) and fully unit-tested |
 | M0 Foundations | ✅ Done — T1–T8 complete (module, config, logging, store, migrations, EventLog API, `/healthz`, CI) + enum-normalization migration 0003 ([ADR-0005](docs/adr/0005-canonical-enum-values.md)). Gate G0 passed: kill -9 crash/restart verified, migrations forward-only and idempotent |
-| M1 Walking Skeleton | 🚧 In progress |
+| M1 Walking Skeleton | 🚧 Code-complete (T1–T7); Gate G1 evidence: [docs/demo-m1.md](docs/demo-m1.md), E2E + AST containment tests in CI. **T8 (quality probe) pending a live Ollama** — protocol ready: [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md) |
 | M2 Container Spine | ⬜ Not started |
 | M3 Dialectical Loop v1 | ⬜ Not started |
 | M4 Airlock & Gateway | ⬜ Not started |

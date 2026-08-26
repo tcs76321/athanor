@@ -4,6 +4,8 @@
 /spikes/**/build/*.dll
 /spikes/**/*.db
 /spikes/**/*.exe
+/spikes/**/main
+/spikes/**/main_modernc
 
 # Athanor runtime state (never committed)
 /state/

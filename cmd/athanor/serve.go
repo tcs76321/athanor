@@ -52,8 +52,6 @@ func serveFlags(args []string) *daemonFlags {
 	return f
 }
 
-func mustFlags(f *daemonFlags, _ []string) *daemonFlags { return f }
-
 // runServe is the serve entry point.
 func runServe(f *daemonFlags) {
 	if f.version {

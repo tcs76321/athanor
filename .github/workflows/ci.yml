@@ -1,6 +1,11 @@
 # CI for the Athanor daemon (ROADMAP M0-T8).
 # CGO is required: internal/store uses mattn/go-sqlite3 (ADR 0003),
 # so every job sets CGO_ENABLED=1 via the Makefile.
+#
+# Action versions: golangci-lint-action v7 is required for golangci-lint
+# v2 configs (v6 rejects v2 version strings); checkout@v5 / setup-go@v6
+# / golangci-lint-action@v7 run on Node.js 24, avoiding the Node 20
+# deprecation.
 name: ci
 
 on:
@@ -15,8 +20,8 @@ jobs:
   vet:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
       - name: Vet
@@ -25,8 +30,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
       - name: Test (race detector)
@@ -35,12 +40,12 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.13
           args: --timeout=5m

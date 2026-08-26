@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/config"
@@ -119,26 +118,6 @@ func (e *testEnv) submit(t *testing.T) (jobID string) {
 		t.Fatal(err)
 	}
 	return j.ID
-}
-
-func (e *testEnv) waitFor(t *testing.T, jobID string, want job.State) job.Job {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		j, err := e.jobs.Get(context.Background(), jobID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if j.State == want {
-			return j
-		}
-		if j.State.Terminal() {
-			t.Fatalf("job reached terminal %s, want %s", j.State, want)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("job never reached %s", want)
-	return job.Job{}
 }
 
 // TestRunCompletesFullChain drives a job synchronously to completion.

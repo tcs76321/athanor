@@ -17,7 +17,7 @@ func TestCategoriesEmitDistinctTaggedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	for _, cat := range config.Categories {
 		log, err := m.Logger(cat)
@@ -63,7 +63,7 @@ func TestCategoriesEmitDistinctTaggedEvents(t *testing.T) {
 		if rec.Msg != "test event" || rec.Level == "" || rec.Time == "" {
 			t.Errorf("%s: incomplete event record: %+v", name, rec)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 }
 
@@ -72,7 +72,7 @@ func TestDisabledCategoryRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 	if _, err := m.Logger("jobs"); err != nil {
 		t.Fatalf("enabled category rejected: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRotationAndPruning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 
 	log, err := m.Logger("jobs")
 	if err != nil {
@@ -126,7 +126,7 @@ func TestLevelFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Close()
+	defer func() { _ = m.Close() }()
 	log, err := m.Logger("alarms")
 	if err != nil {
 		t.Fatal(err)

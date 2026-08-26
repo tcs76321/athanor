@@ -16,7 +16,7 @@ func openTemp(t *testing.T) (*Store, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s, path
 }
 
@@ -84,7 +84,9 @@ func TestMigrateAppliesEmbeddedSchema(t *testing.T) {
 	}
 	readUpdated := func() string {
 		var ts string
-		db.QueryRow(`SELECT updated_at FROM projects WHERE id='p1'`).Scan(&ts)
+		if err := db.QueryRow(`SELECT updated_at FROM projects WHERE id='p1'`).Scan(&ts); err != nil {
+			t.Fatalf("reading updated_at: %v", err)
+		}
 		return ts
 	}
 	first := readUpdated()
@@ -105,12 +107,16 @@ func TestMigrateRerunIsNoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	var countBefore int
-	s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&countBefore)
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&countBefore); err != nil {
+		t.Fatal(err)
+	}
 	if err := Migrate(s.DB(), migrations.FS, dir); err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
 	var countAfter int
-	s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&countAfter)
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&countAfter); err != nil {
+		t.Fatal(err)
+	}
 	if countAfter != countBefore {
 		t.Errorf("schema_migrations rows changed on rerun: %d -> %d", countBefore, countAfter)
 	}
@@ -130,5 +136,5 @@ func TestMigrateBackupCreated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backup is not openable as SQLite: %v", err)
 	}
-	bk.Close()
+	_ = bk.Close()
 }

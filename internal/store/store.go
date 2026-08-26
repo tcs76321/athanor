@@ -35,7 +35,7 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("pinging %s: %w", path, err)
 	}
 	return &Store{db: db, path: path}, nil

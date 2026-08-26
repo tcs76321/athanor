@@ -91,7 +91,7 @@ func pendingMigrations(db *sql.DB, fsys fs.FS) ([]migration, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading applied versions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var v int
 		if err := rows.Scan(&v); err != nil {
@@ -176,7 +176,8 @@ func applyOne(db *sql.DB, m migration) error {
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
-	defer tx.Rollback()
+	// Rollback after a successful Commit is a no-op error, safe to ignore.
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(m.body); err != nil {
 		return err
 	}

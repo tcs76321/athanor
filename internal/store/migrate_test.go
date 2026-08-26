@@ -58,9 +58,11 @@ func TestFailedMigrationLeavesPriorVersionIntact(t *testing.T) {
 		t.Fatalf("pre-existing data lost or wrong: val=%q err=%v", val, err)
 	}
 	var stuff int
-	db.QueryRow(
+	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='stuff'`,
-	).Scan(&stuff)
+	).Scan(&stuff); err != nil {
+		t.Fatalf("checking for leaked 'stuff' table: %v", err)
+	}
 	if stuff != 0 {
 		t.Fatalf("partial migration leaked table 'stuff' (count=%d)", stuff)
 	}

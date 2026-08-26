@@ -28,7 +28,7 @@ func newRotatingWriter(path string, maxSize int64, keep int) (*rotatingWriter, e
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("stating log file: %w", err)
 	}
 	return &rotatingWriter{path: path, f: f, size: info.Size(), maxSize: maxSize, keep: keep}, nil
@@ -77,7 +77,7 @@ func (w *rotatingWriter) pruneLocked() {
 	}
 	sort.Strings(matches) // unixnanos sort lexically oldest-first
 	for _, old := range matches[:len(matches)-w.keep] {
-		os.Remove(old)
+		_ = os.Remove(old) // pruning is best-effort; nothing sensible to do on failure
 	}
 }
 

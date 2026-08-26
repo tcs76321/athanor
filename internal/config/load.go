@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,8 +22,6 @@ var Categories = []string{
 	"inference", "feedback", "strategy", "context", "daydream",
 	"power", "backup",
 }
-
-var activeHoursRE = regexp.MustCompile(`^\d{2}:\d{2}-\d{2}:\d{2}$`)
 
 // Load reads, parses, applies defaults to, and validates the configuration
 // at path. Each failure mode produces a distinct error.

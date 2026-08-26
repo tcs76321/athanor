@@ -106,10 +106,14 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-Pre-MVP. Completed so far: task-000 SQLite/sqlite-vec Go spike and a power-management draft. The implementation plan lives in [`ROADMAP.md`](ROADMAP.md).
+Pre-MVP. Completed so far: task-000 SQLite/sqlite-vec Go spike, a power-management draft, and M0-T1 through M0-T5b of Foundations (Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations, and the execution-spine + learning/control schemas). Remaining in M0: EventLog append API, `/healthz`, CI bootstrap. The implementation plan lives in [`ROADMAP.md`](ROADMAP.md).
 
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — the complete design: topology, object model, MCE, personas, dialectical engine, security, configuration reference, testing strategy.
-- **[docs/](docs/)** — implementation notes (e.g., [SQLite setup](docs/sqlite-setup.md)).
+- **[docs/](docs/)** — implementation notes ([SQLite setup](docs/sqlite-setup.md), [ADRs](docs/adr/)).
 - **[spikes/](spikes/)** — throwaway validation code.
+
+## License
+
+Athanor is licensed under the [GNU Affero General Public License v3.0](LICENSE).

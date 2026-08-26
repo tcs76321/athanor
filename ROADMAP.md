@@ -10,7 +10,7 @@
 |---|---|
 | TASK-000 SQLite + sqlite-vec spike | ✅ Done (findings: [docs/sqlite-setup.md](docs/sqlite-setup.md)) |
 | Power manager draft (`internal/power`) | 🚧 Drafted; VM-era naming to be corrected at M7-T1 |
-| M0 Foundations | ⬜ Not started |
+| M0 Foundations | 🚧 In progress — T1–T5b done (module, config, logging, store, migrations); T6–T8 remaining (EventLog API, `/healthz`, CI) |
 | M1 Walking Skeleton | ⬜ Not started |
 | M2 Container Spine | ⬜ Not started |
 | M3 Dialectical Loop v1 | ⬜ Not started |

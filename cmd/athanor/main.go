@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tcs76321/athanor/internal/config"
+	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/logging"
 	"github.com/tcs76321/athanor/internal/server"
 	"github.com/tcs76321/athanor/internal/store"
@@ -94,11 +95,19 @@ func run(configPath, addr, stateDir string) error {
 		return fmt.Errorf("migrating database: %w", err)
 	}
 
+	// Kill switch (M1-T6, §22): loads persisted frozen state so a restart
+	// inherits freeze status, never resets it.
+	killSwitch, err := control.NewKillSwitch(st)
+	if err != nil {
+		return fmt.Errorf("loading kill switch state: %w", err)
+	}
+
 	loopAddr, err := server.LocalhostAddr(addr)
 	if err != nil {
 		return err
 	}
 	srv := server.New(version)
+	srv.SetControl(killSwitch)
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,

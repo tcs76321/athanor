@@ -1,0 +1,92 @@
+// Package project persists projects, goals, and their M1 tasks
+// (ARCHITECTURE §5–§7). M1 maps one goal to one task (no DAG yet —
+// decomposition arrives with M3); each submitted goal becomes a runnable
+// task whose job the engine executes.
+package project
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/tcs76321/athanor/internal/store"
+)
+
+// Archetypes are the §6.2 project archetypes; the set is closed per the
+// projects table CHECK.
+const (
+	ArchetypeText     = "text"
+	ArchetypeCode     = "code"
+	ArchetypeDocument = "document"
+	ArchetypeData     = "data"
+	ArchetypeMedia    = "media"
+)
+
+// ValidArchetype reports whether a is one of the §6.2 archetypes.
+func ValidArchetype(a string) bool {
+	switch a {
+	case ArchetypeText, ArchetypeCode, ArchetypeDocument, ArchetypeData, ArchetypeMedia:
+		return true
+	default:
+		return false
+	}
+}
+
+// ErrNotFound reports a missing project or task.
+var ErrNotFound = errors.New("project not found")
+
+// Goal text length bounds come from the goals table CHECK (§5).
+const (
+	goalMinLen = 20
+	goalMaxLen = 500
+)
+
+// Project is one persisted project row (§6.1).
+type Project struct {
+	ID        string
+	Name      string
+	Archetype string
+	Goal      string
+	Status    string
+	CreatedAt time.Time
+}
+
+// Task is one persisted task row (§7.3, M1 subset).
+type Task struct {
+	ID          string
+	ProjectID   string
+	GoalID      string
+	Title       string
+	Description string
+	Status      string
+	Criteria    []string
+}
+
+// Repo persists projects, goals, and tasks.
+type Repo struct {
+	store *store.Store
+}
+
+// NewRepo returns a repository backed by s.
+func NewRepo(s *store.Store) *Repo {
+	return &Repo{store: s}
+}
+
+func validateGoalText(goal string) error {
+	if len(goal) < goalMinLen || len(goal) > goalMaxLen {
+		return fmt.Errorf("goal text must be %d–%d characters, got %d", goalMinLen, goalMaxLen, len(goal))
+	}
+	return nil
+}
+
+func marshalCriteria(criteria []string) (string, error) {
+	if criteria == nil {
+		criteria = []string{}
+	}
+	raw, err := json.Marshal(criteria)
+	if err != nil {
+		return "", fmt.Errorf("marshalling criteria: %w", err)
+	}
+	return string(raw), nil
+}

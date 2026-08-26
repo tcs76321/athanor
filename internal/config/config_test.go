@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const validMinimal = `
@@ -225,6 +227,37 @@ func TestDefaultEqualsEmptySpecifiedConfig(t *testing.T) {
 	}
 	if !reflect.DeepEqual(def, fromFile) {
 		t.Errorf("Default() differs from Parse(minimal):\ndef:   %+v\nfile:  %+v", def, fromFile)
+	}
+}
+
+// TestDefaultYAMLRoundTrip proves `athanor init` output is loadable: the
+// marshaled default config parses back into exactly the same values
+// (durations render as quoted strings via Duration.MarshalYAML).
+func TestDefaultYAMLRoundTrip(t *testing.T) {
+	def, err := Default()
+	if err != nil {
+		t.Fatalf("Default(): %v", err)
+	}
+	raw, err := yaml.Marshal(def)
+	if err != nil {
+		t.Fatalf("marshalling default: %v", err)
+	}
+	parsed, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing marshaled default: %v\nyaml:\n%s", err, raw)
+	}
+	// Normalize nil vs empty slices (nil marshals as [] and parses back
+	// as empty-but-non-nil; semantically identical).
+	for _, c := range []*Config{def, parsed} {
+		if len(c.Network.AllowList) == 0 {
+			c.Network.AllowList = nil
+		}
+		if len(c.Logging.Categories) == 0 {
+			c.Logging.Categories = nil
+		}
+	}
+	if !reflect.DeepEqual(def, parsed) {
+		t.Errorf("marshaled default does not round-trip to the same config:\ndef:  %+v\nwant: %+v", parsed, def)
 	}
 }
 

@@ -1,0 +1,176 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/tcs76321/athanor/internal/api"
+	"github.com/tcs76321/athanor/internal/artifact"
+	"github.com/tcs76321/athanor/internal/control"
+	"github.com/tcs76321/athanor/internal/engine"
+	"github.com/tcs76321/athanor/internal/job"
+	"github.com/tcs76321/athanor/internal/llm"
+	"github.com/tcs76321/athanor/internal/logging"
+	"github.com/tcs76321/athanor/internal/project"
+	"github.com/tcs76321/athanor/internal/server"
+	"github.com/tcs76321/athanor/internal/store"
+	"github.com/tcs76321/athanor/migrations"
+)
+
+// daemonFlags holds the serve command's flag set.
+type daemonFlags struct {
+	configPath string
+	addr       string
+	stateDir   string
+	version    bool
+}
+
+// serveFlags parses daemon flags; extra args after "serve" are included.
+func serveFlags(args []string) *daemonFlags {
+	f := &daemonFlags{}
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.StringVar(&f.configPath, "config", "config.yaml", "path to config.yaml")
+	fs.StringVar(&f.addr, "addr", "127.0.0.1:7420", "HTTP listen address (loopback only, §21.8)")
+	fs.StringVar(&f.stateDir, "state-dir", "state", "state directory (database, logs, backups)")
+	fs.BoolVar(&f.version, "version", false, "print version and exit")
+	if len(args) > 0 && args[0] == "serve" {
+		args = args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintln(os.Stderr, "athanor:", err)
+		os.Exit(2)
+	}
+	return f
+}
+
+func mustFlags(f *daemonFlags, _ []string) *daemonFlags { return f }
+
+// runServe is the serve entry point.
+func runServe(f *daemonFlags) {
+	if f.version {
+		fmt.Println("athanor", version)
+		return
+	}
+	if err := run(f.configPath, f.addr, f.stateDir); err != nil {
+		fmt.Fprintln(os.Stderr, "athanor:", err)
+		os.Exit(1)
+	}
+}
+
+// run boots the daemon and blocks until an OS signal or server failure.
+func run(configPath, addr, stateDir string) error {
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	logMgr, err := logging.New(logging.Options{
+		Dir:        filepath.Join(stateDir, "logs"),
+		Level:      cfg.Logging.Level,
+		Categories: cfg.Logging.Categories,
+	})
+	if err != nil {
+		return fmt.Errorf("initialising logging: %w", err)
+	}
+	defer func() { _ = logMgr.Close() }()
+
+	st, err := store.Open(filepath.Join(stateDir, "athanor.db"))
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := store.Migrate(st.DB(), migrations.FS, filepath.Join(stateDir, "backups")); err != nil {
+		return fmt.Errorf("migrating database: %w", err)
+	}
+
+	// Kill switch (M1-T6, §22): loads persisted frozen state so a restart
+	// inherits freeze status, never resets it.
+	killSwitch, err := control.NewKillSwitch(st)
+	if err != nil {
+		return fmt.Errorf("loading kill switch state: %w", err)
+	}
+
+	// Wire the walking skeleton (M1): personas → LLM client → engine.
+	registry, err := llm.NewRegistry(cfg.Personas)
+	if err != nil {
+		return fmt.Errorf("building persona registry: %w", err)
+	}
+	eng := engine.New(cfg, st,
+		job.NewRepository(st),
+		project.NewRepo(st),
+		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
+		llm.NewClient(cfg.Inference.OllamaURL, nil),
+		registry,
+		killSwitch,
+	)
+
+	loopAddr, err := server.LocalhostAddr(addr)
+	if err != nil {
+		return err
+	}
+	srv := server.New(version)
+	srv.SetControl(killSwitch)
+	api.New(project.NewRepo(st), job.NewRepository(st),
+		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
+		eng, killSwitch, st).Register(srv.Mux())
+
+	httpSrv := &http.Server{
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	ln, err := net.Listen("tcp", loopAddr)
+	if err != nil {
+		return fmt.Errorf("listening on %s: %w", loopAddr, err)
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- httpSrv.Serve(ln) }()
+
+	// Dogfood the EventLog: record startup in the append-only audit trail.
+	if _, err := st.AppendEvent(context.Background(), store.Event{
+		Category: "jobs",
+		Data:     map[string]any{"event": "startup", "version": version},
+	}); err != nil {
+		return fmt.Errorf("recording startup event: %w", err)
+	}
+
+	// §23.6: resume any job that was mid-flight when the daemon died.
+	eng.Recover(context.Background())
+
+	fmt.Printf("athanor %s listening on http://%s\n", version, loopAddr)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	select {
+	case sig := <-stop:
+		fmt.Printf("received %s — shutting down\n", sig)
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("http server: %w", err)
+		}
+		return nil
+	}
+
+	if _, err := st.AppendEvent(context.Background(), store.Event{
+		Category: "jobs",
+		Data:     map[string]any{"event": "shutdown"},
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "athanor: recording shutdown event: %v\n", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutting down http server: %w", err)
+	}
+	return nil
+}

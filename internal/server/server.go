@@ -26,27 +26,36 @@ type Server struct {
 	version string
 	started time.Time
 	control Control
+	mux     *http.ServeMux
 }
 
 // New returns a Server whose uptime clock starts now.
 func New(version string) *Server {
-	return &Server{version: version, started: time.Now()}
+	s := &Server{version: version, started: time.Now(), mux: http.NewServeMux()}
+	s.mux.HandleFunc("/healthz", s.handleHealthz)
+	return s
 }
 
 // SetControl attaches the kill switch. Without it the control routes are
 // not registered — a daemon with no control surface cannot be frozen.
 func (s *Server) SetControl(c Control) {
 	s.control = c
+	s.mux.HandleFunc("/freeze", s.handleFreeze)
 }
+
+// Register attaches additional routes (e.g. the M1 API) to the same
+// loopback-only mux.
+func (s *Server) Register(pattern string, h http.HandlerFunc) {
+	s.mux.HandleFunc(pattern, h)
+}
+
+// Mux exposes the underlying mux for packages that register many routes
+// at once (internal/api).
+func (s *Server) Mux() *http.ServeMux { return s.mux }
 
 // Handler returns the root http.Handler with all routes attached.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", s.handleHealthz)
-	if s.control != nil {
-		mux.HandleFunc("/freeze", s.handleFreeze)
-	}
-	return mux
+	return s.mux
 }
 
 type healthResponse struct {
@@ -93,7 +102,7 @@ func (s *Server) handleFreeze(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(freezeResponse{
 			Frozen:  true,
-			Message: "frozen: no new work will start; POST to unfreeze requires a reason",
+			Message: "frozen: no new work will start; unfreeze requires a reason (DELETE /freeze with {\"reason\": \"...\"})",
 		})
 	case http.MethodDelete:
 		var body struct {

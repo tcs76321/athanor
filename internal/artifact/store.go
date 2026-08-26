@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,12 +40,18 @@ func NewStore(s *store.Store, dir string) *Store {
 // CreateDraft writes a new version-1 draft artifact: content to disk
 // (0600), row in SQLite with its SHA-256 hash, and an audit event.
 func (a *Store) CreateDraft(ctx context.Context, projectID string, kind Kind, content []byte) (Artifact, error) {
+	return a.CreateDraftFor(ctx, projectID, "", "", kind, content)
+}
+
+// CreateDraftFor is CreateDraft with optional task and job attribution,
+// used by the engine (§9.2: artifacts belong to a job's execution).
+func (a *Store) CreateDraftFor(ctx context.Context, projectID, taskID, jobID string, kind Kind, content []byte) (Artifact, error) {
 	if !kind.Valid() {
 		return Artifact{}, fmt.Errorf("invalid artifact kind %q (§9.1)", kind)
 	}
 	id := ids.New()
 	art, err := a.persist(ctx, artifactRow{
-		ID: id, ProjectID: projectID, Kind: kind,
+		ID: id, ProjectID: projectID, TaskID: taskID, JobID: jobID, Kind: kind,
 		Version: 1, Status: StatusDraft,
 	}, content)
 	if err != nil {
@@ -56,6 +63,18 @@ func (a *Store) CreateDraft(ctx context.Context, projectID string, kind Kind, co
 		return Artifact{}, err
 	}
 	return art, nil
+}
+
+// LatestForJob returns the newest artifact of a kind produced by a job.
+func (a *Store) LatestForJob(ctx context.Context, jobID string, kind Kind) (Artifact, error) {
+	row := a.db.DB().QueryRowContext(ctx,
+		artifactSelect+` WHERE job_id = ? AND kind = ? ORDER BY version DESC LIMIT 1`,
+		jobID, string(kind))
+	art, err := scanArtifact(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Artifact{}, fmt.Errorf("%w: no %s artifact for job %s", ErrNotFound, kind, jobID)
+	}
+	return art, err
 }
 
 // NewVersion creates the next version of an artifact, superseding the old

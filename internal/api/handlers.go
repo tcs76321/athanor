@@ -1,0 +1,113 @@
+package api
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/tcs76321/athanor/internal/job"
+	"github.com/tcs76321/athanor/internal/project"
+	"github.com/tcs76321/athanor/internal/store"
+)
+
+type goalRequest struct {
+	Goal     string   `json:"goal"`
+	Criteria []string `json:"acceptance_criteria"`
+}
+
+type goalResponse struct {
+	TaskID string `json:"task_id"`
+	JobID  string `json:"job_id"`
+}
+
+// handleGoalSubmit submits a goal to a project: it creates the goal, its
+// M1 task, and a queued job, then hands the job to the engine. Frozen
+// daemons reject new work (§22.1).
+func (a *API) handleGoalSubmit(w http.ResponseWriter, r *http.Request) {
+	if a.freezer.Frozen() {
+		writeError(w, http.StatusConflict,
+			"daemon is frozen: no new work is accepted (unfreeze with a reason first, §22.2)")
+		return
+	}
+	var req goalRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	task, err := a.projects.SubmitGoal(r.Context(), r.PathValue("id"), req.Goal, req.Criteria)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, project.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	j, err := a.jobs.Create(r.Context(), task.ID, task.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.engine.Enqueue(j.ID)
+	writeJSON(w, http.StatusCreated, goalResponse{TaskID: task.ID, JobID: j.ID})
+}
+
+func (a *API) handleArtifacts(w http.ResponseWriter, r *http.Request) {
+	list, err := a.artifacts.ListByProject(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, art := range list {
+		out = append(out, map[string]any{
+			"id": art.ID, "kind": string(art.Kind), "version": art.Version,
+			"status": string(art.Status), "task_id": art.TaskID, "job_id": art.JobID,
+			"content_hash": art.ContentHash, "created_at": art.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"artifacts": out})
+}
+
+func (a *API) handleJobGet(w http.ResponseWriter, r *http.Request) {
+	j, err := a.jobs.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	resp := map[string]any{
+		"id": j.ID, "state": string(j.State), "task_id": j.TaskID, "project_id": j.ProjectID,
+		"recovery_flag": j.RecoveryFlag,
+	}
+	if j.PausedFrom != "" {
+		resp["paused_from"] = string(j.PausedFrom)
+	}
+	if j.StartedAt != nil {
+		resp["started_at"] = j.StartedAt
+	}
+	if j.FinishedAt != nil {
+		resp["finished_at"] = j.FinishedAt
+	}
+	// The final artifact is the useful tail of a watch — link it directly.
+	if j.State == job.StateCompleted {
+		if p, perr := a.projects.Get(r.Context(), j.ProjectID); perr == nil {
+			if art, aerr := a.artifacts.LatestForJob(r.Context(), j.ID, finalKind(p.Archetype)); aerr == nil {
+				resp["artifact_id"] = art.ID
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *API) handleJobEvents(w http.ResponseWriter, r *http.Request) {
+	events, err := a.db.QueryEvents(r.Context(), store.EventFilter{JobID: r.PathValue("id")})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		out = append(out, map[string]any{
+			"id": e.ID, "ts": e.TS, "category": e.Category, "level": e.Level, "data": e.DataJSON,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+}

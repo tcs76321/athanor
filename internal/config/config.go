@@ -45,6 +45,12 @@ func (d Duration) String() string { return time.Duration(d).String() }
 // D parses the value as a standard time.Duration.
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
+// MarshalYAML renders the canonical string form so `athanor init` output
+// round-trips through Load.
+func (d Duration) MarshalYAML() (any, error) {
+	return time.Duration(d).String(), nil
+}
+
 // Config is the complete daemon configuration (§29).
 type Config struct {
 	Version          int              `yaml:"version"`

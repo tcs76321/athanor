@@ -1,30 +1,29 @@
-// Command athanor is the daemon entry point.
+// Command athanor is the daemon entry point and CLI (M1-T7).
 //
-// Boot sequence (M0-T7): load config (falling back to built-in defaults
-// when the file is absent) → init logging → open store → run migrations
-// → serve /healthz on loopback → graceful shutdown on SIGINT/SIGTERM.
-// Later milestones wire subsystems into this order.
+// Boot sequence (daemon): load config (falling back to built-in defaults
+// when the file is absent) → init logging → open store → run migrations →
+// load kill switch → wire engine → serve on loopback → recover active
+// jobs → graceful shutdown on SIGINT/SIGTERM.
+//
+// Client subcommands talk to a running daemon over the loopback HTTP API:
+//
+//	athanor                        run the daemon (same as `serve`)
+//	athanor init                   write a config.yaml with every default
+//	athanor project create         create a project with its first goal
+//	athanor goal submit            add a goal and start its job
+//	athanor job watch              stream a job's progress to completion
+//	athanor artifacts              list a project's artifacts
+//	athanor freeze / unfreeze      drive the kill switch (§22)
 package main
 
 import (
-	"context"
 	"errors"
-	"flag"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"syscall"
+	"strings"
 	"time"
 
 	"github.com/tcs76321/athanor/internal/config"
-	"github.com/tcs76321/athanor/internal/control"
-	"github.com/tcs76321/athanor/internal/logging"
-	"github.com/tcs76321/athanor/internal/server"
-	"github.com/tcs76321/athanor/internal/store"
-	"github.com/tcs76321/athanor/migrations"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -51,107 +50,57 @@ func loadConfig(path string) (*config.Config, error) {
 }
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "path to config.yaml")
-	addr := flag.String("addr", "127.0.0.1:7420", "HTTP listen address (loopback only, §21.8)")
-	stateDir := flag.String("state-dir", "state", "state directory (database, logs, backups)")
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("athanor", version)
+	args := os.Args[1:]
+	// No args, explicit "serve", or leading daemon flags (e.g.
+	// `athanor -addr :9000`, the `make run` form) all run the daemon.
+	if len(args) == 0 || args[0] == "serve" || strings.HasPrefix(args[0], "-") {
+		runServe(serveFlags(args))
 		return
 	}
 
-	if err := run(*configPath, *addr, *stateDir); err != nil {
+	var err error
+	switch args[0] {
+	case "init":
+		err = runInit(args[1:])
+	case "project":
+		err = runProject(args[1:])
+	case "goal":
+		err = runGoal(args[1:])
+	case "job":
+		err = runJob(args[1:])
+	case "artifacts":
+		err = runArtifacts(args[1:])
+	case "freeze":
+		err = runFreeze(args[1:])
+	case "unfreeze":
+		err = runUnfreeze(args[1:])
+	case "-h", "--help", "help":
+		usage()
+	case "-v", "--version", "version":
+		fmt.Println("athanor", version)
+	default:
+		fmt.Fprintf(os.Stderr, "athanor: unknown command %q\n\n", args[0])
+		usage()
+		os.Exit(1)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "athanor:", err)
 		os.Exit(1)
 	}
 }
 
-// run boots the daemon and blocks until an OS signal or server failure.
-func run(configPath, addr, stateDir string) error {
-	cfg, err := loadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
+func usage() {
+	fmt.Print(`usage: athanor [command]
 
-	logMgr, err := logging.New(logging.Options{
-		Dir:        filepath.Join(stateDir, "logs"),
-		Level:      cfg.Logging.Level,
-		Categories: cfg.Logging.Categories,
-	})
-	if err != nil {
-		return fmt.Errorf("initialising logging: %w", err)
-	}
-	defer func() { _ = logMgr.Close() }()
-
-	st, err := store.Open(filepath.Join(stateDir, "athanor.db"))
-	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer func() { _ = st.Close() }()
-
-	if err := store.Migrate(st.DB(), migrations.FS, filepath.Join(stateDir, "backups")); err != nil {
-		return fmt.Errorf("migrating database: %w", err)
-	}
-
-	// Kill switch (M1-T6, §22): loads persisted frozen state so a restart
-	// inherits freeze status, never resets it.
-	killSwitch, err := control.NewKillSwitch(st)
-	if err != nil {
-		return fmt.Errorf("loading kill switch state: %w", err)
-	}
-
-	loopAddr, err := server.LocalhostAddr(addr)
-	if err != nil {
-		return err
-	}
-	srv := server.New(version)
-	srv.SetControl(killSwitch)
-	httpSrv := &http.Server{
-		Handler:           srv.Handler(),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	ln, err := net.Listen("tcp", loopAddr)
-	if err != nil {
-		return fmt.Errorf("listening on %s: %w", loopAddr, err)
-	}
-	errCh := make(chan error, 1)
-	go func() { errCh <- httpSrv.Serve(ln) }()
-
-	// Dogfood the EventLog: record startup in the append-only audit trail.
-	if _, err := st.AppendEvent(context.Background(), store.Event{
-		Category: "jobs",
-		Data:     map[string]any{"event": "startup", "version": version},
-	}); err != nil {
-		return fmt.Errorf("recording startup event: %w", err)
-	}
-
-	fmt.Printf("athanor %s listening on http://%s\n", version, loopAddr)
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	select {
-	case sig := <-stop:
-		fmt.Printf("received %s — shutting down\n", sig)
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("http server: %w", err)
-		}
-		return nil
-	}
-
-	if _, err := st.AppendEvent(context.Background(), store.Event{
-		Category: "jobs",
-		Data:     map[string]any{"event": "shutdown"},
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "athanor: recording shutdown event: %v\n", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := httpSrv.Shutdown(ctx); err != nil {
-		return fmt.Errorf("shutting down http server: %w", err)
-	}
-	return nil
+commands:
+  (default) serve    run the daemon: -config, -addr, -state-dir, -version
+  init               write ./config.yaml containing every default value
+  project create     -name -archetype -goal [-criteria] [-addr]
+  goal submit        -project -goal [-criteria] [-addr]
+  job watch          -job [-timeout] [-addr]   (streams progress, prints artifact)
+  artifacts          -project [-addr]          (lists a project's artifacts)
+  freeze             [-addr]                   (§22 kill switch)
+  unfreeze           -reason "..." [-addr]     (requires a reason, logged)
+  version            print version
+`)
 }

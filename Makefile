@@ -11,7 +11,7 @@ export CGO_ENABLED
 .PHONY: build test test-race vet tidy run clean
 
 build:
-	go build ./...
+	go build -o bin/athanor ./cmd/athanor
 
 run:
 	go run ./cmd/athanor

@@ -7,6 +7,9 @@
 /spikes/**/main
 /spikes/**/main_modernc
 
+# Compiled daemon
+/bin/
+
 # Athanor runtime state (never committed)
 /state/
 /backups/

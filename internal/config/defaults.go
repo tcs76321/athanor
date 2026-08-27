@@ -144,6 +144,15 @@ func applyDefaults(c *Config) {
 	if len(c.Logging.Categories) == 0 {
 		c.Logging.Categories = append([]string(nil), Categories...)
 	}
+
+	// JobPod defaults (M2-T4). Image is left empty on purpose:
+	// production must configure it explicitly so an operator cannot
+	// accidentally launch a daemon that picks up the wrong base image.
+	// Resource limits are zero so jobpod.withDefaults fills the §21.2
+	// values (PidsLimit=64, MemoryMB=512, CPUs=1.0).
+	if c.JobPod.DefaultTools == nil {
+		c.JobPod.DefaultTools = []string{}
+	}
 }
 
 func defaultPersona(p *PersonaConfig, model string, ctx int, temp float64) {

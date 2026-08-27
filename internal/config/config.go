@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/tcs76321/athanor/internal/jobpod"
+	"github.com/tcs76321/athanor/internal/toolenvelope"
 	"gopkg.in/yaml.v3"
 )
 
@@ -67,6 +69,7 @@ type Config struct {
 	Security         Security         `yaml:"security"`
 	Backup           Backup           `yaml:"backup"`
 	Logging          Logging          `yaml:"logging"`
+	JobPod           JobPod           `yaml:"job_pod"`
 
 	// SourcePath is set by Load and records where the config came from.
 	SourcePath string `yaml:"-"`
@@ -237,4 +240,45 @@ type Backup struct {
 type Logging struct {
 	Level      string   `yaml:"level"`
 	Categories []string `yaml:"categories"`
+}
+
+// JobPod configures per-job tool allowlists and Job Pod image
+// resolution (ARCHITECTURE §25, ROADMAP M2-T4).
+//
+// DefaultTools is the per-job tool envelope applied when a task does
+// not declare its own override. An empty list is a valid default and
+// means "no tools" — the engine still runs the LLM-only phases.
+//
+// Image is the resolved image reference used for ephemeral Job Pods.
+// Required in production: cmd/athanor/serve.go fails fast if Image is
+// empty. Empty in unit tests that use a fake engine.ToolRunner.
+//
+// ResourceLimits override the §21.2 defaults. A zero value in any
+// field means "use the jobpod default" (see jobpod.Limits).
+type JobPod struct {
+	DefaultTools []string `yaml:"default_tools"`
+	Image        string   `yaml:"image"`
+	PidsLimit    int      `yaml:"pids_limit"`
+	MemoryMB     int      `yaml:"memory_mb"`
+	CPUs         float64  `yaml:"cpus"`
+}
+
+// JobPodEnvelope returns the per-job default tool envelope. The
+// result is the closed-set list from c.JobPod.DefaultTools. A
+// non-nil error indicates a closed-set violation and should fail
+// the daemon at boot.
+func (c *Config) JobPodEnvelope() (toolenvelope.Envelope, error) {
+	return toolenvelope.Parse(c.JobPod.DefaultTools)
+}
+
+// JobPodResourceLimits converts the config's JobPod block into a
+// jobpod.Limits. Zero values are passed through; jobpod.withDefaults
+// fills them at pod-creation time. The translation lives here so
+// the YAML schema does not have to mention the jobpod package.
+func (c *Config) JobPodResourceLimits() jobpod.Limits {
+	return jobpod.Limits{
+		PidsLimit: c.JobPod.PidsLimit,
+		MemoryMB:  c.JobPod.MemoryMB,
+		CPUs:      c.JobPod.CPUs,
+	}
 }

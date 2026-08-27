@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/tcs76321/athanor/internal/toolenvelope"
 )
 
 // validateRaw rejects explicitly invalid values before defaults are applied.
@@ -99,6 +101,13 @@ func validateRaw(c *Config) error {
 		if !known[cat] {
 			return fmt.Errorf("logging.categories: unknown category %q (see ARCHITECTURE §28.1)", cat)
 		}
+	}
+	// M2-T4: job_pod.default_tools must be a subset of the closed set.
+	// toolenvelope.Parse is the single source of truth for the closed
+	// set; we call it here so a typo in the config is rejected with
+	// the same error a runtime would see.
+	if _, err := toolenvelope.Parse(c.JobPod.DefaultTools); err != nil {
+		return fmt.Errorf("job_pod.default_tools: %w", err)
 	}
 	return nil
 }

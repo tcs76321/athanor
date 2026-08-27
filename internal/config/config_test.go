@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tcs76321/athanor/internal/toolenvelope"
 	"gopkg.in/yaml.v3"
 )
 
@@ -291,5 +292,59 @@ func TestExampleConfigMatchesDefaults(t *testing.T) {
 		exJSON, _ := json.MarshalIndent(example, "", "  ")
 		defJSON, _ := json.MarshalIndent(def, "", "  ")
 		t.Errorf("config.example.yaml drifted from built-in defaults — update the example (or defaults) so they match\nexample:\n%s\ndefaults:\n%s", exJSON, defJSON)
+	}
+}
+
+// TestJobPod_DefaultEnvelopeEmpty (M2-T4) proves the shipped default
+// has an empty tool envelope: no tools are granted to a job unless
+// the operator explicitly opts in. This is the safe default for a
+// tool-execution surface.
+func TestJobPod_DefaultEnvelopeEmpty(t *testing.T) {
+	def, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := def.JobPodEnvelope()
+	if err != nil {
+		t.Fatalf("JobPodEnvelope(): %v", err)
+	}
+	if !env.IsEmpty() {
+		t.Errorf("default JobPod envelope = %v, want empty", env.Tools())
+	}
+}
+
+// TestJobPod_EnvelopeRejectsUnknown (M2-T4) proves the closed-set
+// check runs at config-load time, not just at runtime: a typo in
+// the config is an actionable error, not a silent no-op.
+func TestJobPod_EnvelopeRejectsUnknown(t *testing.T) {
+	bad := []byte("job_pod:\n  default_tools: [execute_code, run_remote_shell]\n")
+	_, err := Parse(bad)
+	if err == nil {
+		t.Fatal("Parse with unknown tool returned nil error; want a job_pod.default_tools error")
+	}
+	if !strings.Contains(err.Error(), "job_pod.default_tools") {
+		t.Errorf("error %q does not mention job_pod.default_tools (the failing field)", err)
+	}
+	if !strings.Contains(err.Error(), "run_remote_shell") {
+		t.Errorf("error %q does not name the offending tool", err)
+	}
+}
+
+// TestJobPod_EnvelopeAcceptsKnown (M2-T4) proves the validation
+// accepts the closed set. A config that explicitly opts in to
+// execute_code + run_tests must parse and yield the matching
+// envelope.
+func TestJobPod_EnvelopeAcceptsKnown(t *testing.T) {
+	good := []byte("job_pod:\n  default_tools: [execute_code, run_tests]\n  image: python:3.12-alpine\n")
+	cfg, err := Parse(good)
+	if err != nil {
+		t.Fatalf("Parse with known tools: %v", err)
+	}
+	env, err := cfg.JobPodEnvelope()
+	if err != nil {
+		t.Fatalf("JobPodEnvelope(): %v", err)
+	}
+	if !env.Allows(toolenvelope.ToolExecuteCode) || !env.Allows(toolenvelope.ToolRunTests) {
+		t.Errorf("envelope = %v, want both tools allowed", env.Tools())
 	}
 }

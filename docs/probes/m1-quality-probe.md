@@ -1,7 +1,9 @@
 # M1 Quality Probe — Protocol and Findings (ROADMAP M1-T8)
 
 **Status: RAN on 2026-08-26.** Findings at the bottom; protocol and
-hypotheses above for context. The default persona models in
+hypotheses above for context. **M1-T8 follow-ups (M1-T8.1 prompt fix,
+M1-T8.2 default-budget raise, M1-T8.3 synthesizing-phase recovery test)
+integrated 2026-08-26.** The default persona models in
 `config.example.yaml` (`qwen2.5:7b`, `qwen2.5-coder:32b`,
 `mistral-nemo:12b`, `phi3:3.8b`, `llama3.1:8b`) are not available in the
 development environment. The probe ran with a substituted persona

@@ -11,9 +11,12 @@ automated E2E test `TestEndToEndWalkingSkeleton`
 ## Prerequisites
 
 - Go 1.26+ with CGO (see [DEVELOPMENT.md](../DEVELOPMENT.md))
-- [Ollama](https://ollama.com) running locally with at least the
-  `mistral-nemo:12b` and `qwen2.5-coder:32b` models pulled (or edit the
-  `personas:` section of your config to models you have)
+- [Ollama](https://ollama.com) running locally. The default `personas:`
+  block assumes five models; if you only have one, copy
+  [`config-probe.yaml`](../config-probe.yaml) and use that as your
+  `-config` instead — it maps every role to a single model. See
+  [`docs/probes/m1-quality-probe.md`](../probes/m1-quality-probe.md) for
+  the per-model findings behind the recommendation.
 - A config pointing `inference.ollama_url` at your Ollama: the default
   URL assumes the Core runs inside a container (M2), so on a dev host
   run `athanor init` and set

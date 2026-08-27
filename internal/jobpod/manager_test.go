@@ -336,3 +336,115 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// TestSweep_RemovesOrphans: a fresh boot finds three stale
+// athanor-job-* containers; the manager knows about one of them.
+// Sweep removes the two orphans, keeps the known one, and reports
+// the right counts.
+func TestSweep_RemovesOrphans(t *testing.T) {
+	knownID := "11111111-1111-4111-8111-111111111111"
+	orphan1 := "athanor-job-22222222-2222-4222-8222-222222222222"
+	orphan2 := "athanor-job-33333333-3333-4333-8333-333333333333"
+	kept := "athanor-job-" + knownID
+
+	client := &fakeClient{
+		responder: func(args []string) ([]byte, []byte, error) {
+			switch args[0] {
+			case "ps":
+				return []byte(orphan1 + "\n" + orphan2 + "\n" + kept + "\n"), nil, nil
+			case "rm":
+				return nil, nil, nil
+			}
+			return nil, nil, nil
+		},
+	}
+	m := New(client, &stubFreezer{}).(*manager)
+	// Seed the in-memory map with the known pod. We do this by
+	// inserting directly so we don't have to run Start's argv
+	// pipeline (which would also call `podman run`).
+	m.pods[knownID] = &podEntry{
+		pod:   &Pod{ID: knownID, State: StateRunning},
+		stopC: make(chan struct{}),
+	}
+
+	res, err := m.Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Inspected != 3 {
+		t.Errorf("Inspected = %d, want 3", res.Inspected)
+	}
+	if res.Removed != 2 {
+		t.Errorf("Removed = %d, want 2", res.Removed)
+	}
+	if res.Kept != 1 {
+		t.Errorf("Kept = %d, want 1", res.Kept)
+	}
+
+	// Inspect the recorded calls: one ps and two rm.
+	calls := client.Calls()
+	rmCount := 0
+	for _, c := range calls {
+		if c[0] == "rm" {
+			rmCount++
+		}
+	}
+	if rmCount != 2 {
+		t.Errorf("rm called %d times, want 2", rmCount)
+	}
+}
+
+// TestSweep_EmptyWhenNoContainers: a clean host returns
+// SweepResult{0, 0, 0} with no rm calls.
+func TestSweep_EmptyWhenNoContainers(t *testing.T) {
+	client := &fakeClient{
+		responder: func(args []string) ([]byte, []byte, error) {
+			if args[0] == "ps" {
+				return []byte(""), nil, nil
+			}
+			return nil, nil, nil
+		},
+	}
+	m := New(client, &stubFreezer{}).(*manager)
+	res, err := m.Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Inspected != 0 || res.Removed != 0 || res.Kept != 0 {
+		t.Errorf("SweepResult = %+v, want all zeros", res)
+	}
+}
+
+// TestSweep_IgnoresForeignContainers: defensive guard. If podman's
+// --filter ever changes semantics and a non-athanor container shows
+// up in the list, Sweep must not touch it.
+func TestSweep_IgnoresForeignContainers(t *testing.T) {
+	foreign := "some-other-container"
+	orphan := "athanor-job-44444444-4444-4444-8444-444444444444"
+	client := &fakeClient{
+		responder: func(args []string) ([]byte, []byte, error) {
+			switch args[0] {
+			case "ps":
+				return []byte(foreign + "\n" + orphan + "\n"), nil, nil
+			case "rm":
+				return nil, nil, nil
+			}
+			return nil, nil, nil
+		},
+	}
+	m := New(client, &stubFreezer{}).(*manager)
+	res, err := m.Sweep(context.Background())
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Removed != 1 {
+		t.Errorf("Removed = %d, want 1 (only the orphan)", res.Removed)
+	}
+
+	// Confirm we never rm'd the foreign container.
+	for _, c := range client.Calls() {
+		if c[0] == "rm" && contains(joinArgs(c), foreign) {
+			t.Errorf("Sweep touched foreign container %q", foreign)
+		}
+	}
+}

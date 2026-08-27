@@ -206,10 +206,3 @@ func parseInspect(s string) (string, int) {
 	}
 	return strings.Join(fields[:len(fields)-1], " "), exitCode
 }
-
-// Sweep is a stub in this commit; the real implementation lands in
-// M2-T2's next commit (the orphan-cleanup task). Returning the
-// zero result is safe because no test asserts non-zero behavior here.
-func (m *manager) Sweep(ctx context.Context) (SweepResult, error) {
-	return SweepResult{}, nil
-}

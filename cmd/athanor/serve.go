@@ -113,7 +113,7 @@ func run(configPath, addr, stateDir string) error {
 	// Job Pod. Sweep runs at boot to clean up after a crash or
 	// kill -9. Engine wiring is M2-T3/M2-T4 territory; this is
 	// the boot-time integration only.
-	podMgr := jobpod.New(NewExecClient(), killSwitch)
+	podMgr := jobpod.New(NewExecClient(), killSwitch, filepath.Join(stateDir, "tokens"))
 	if res, err := podMgr.Sweep(context.Background()); err != nil {
 		// Sweep is opportunistic: a missing podman or a not-yet-
 		// started machine is logged, not fatal.

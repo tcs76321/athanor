@@ -2,7 +2,10 @@ package jobpod
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -61,7 +64,7 @@ func validSpec() Spec {
 // ErrInvalidSpec without making a client call.
 func TestStart_ValidatesSpec(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{})
+	m := New(client, &stubFreezer{}, "")
 
 	cases := []struct {
 		name string
@@ -92,7 +95,7 @@ func TestStart_ValidatesSpec(t *testing.T) {
 // without making a client call.
 func TestStart_RespectsFreezer(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{frozen: true})
+	m := New(client, &stubFreezer{frozen: true}, "")
 	_, err := m.Start(context.Background(), validSpec())
 	if !errors.Is(err, ErrFrozen) {
 		t.Errorf("err = %v, want ErrFrozen", err)
@@ -107,7 +110,7 @@ func TestStart_RespectsFreezer(t *testing.T) {
 // with the §21.2 flag block in argv.
 func TestStart_HappyPath(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{})
+	m := New(client, &stubFreezer{}, "")
 
 	pod, err := m.Start(context.Background(), validSpec())
 	if err != nil {
@@ -148,7 +151,7 @@ func TestStart_HappyPath(t *testing.T) {
 // returns ErrAlreadyExists.
 func TestStart_DuplicateID(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{})
+	m := New(client, &stubFreezer{}, "")
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +165,7 @@ func TestStart_DuplicateID(t *testing.T) {
 // removes the pod from the in-memory map.
 func TestStop_HappyPath(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{})
+	m := New(client, &stubFreezer{}, "")
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +186,7 @@ func TestStop_HappyPath(t *testing.T) {
 // without calling the client.
 func TestStop_NotFound(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{})
+	m := New(client, &stubFreezer{}, "")
 	callsBefore := len(client.Calls())
 	if err := m.Stop(context.Background(), goodID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
@@ -197,7 +200,7 @@ func TestStop_NotFound(t *testing.T) {
 // no-op (ErrNotFound because the pod is no longer in the map).
 func TestStop_Idempotent(t *testing.T) {
 	client := &fakeClient{}
-	m := New(client, &stubFreezer{})
+	m := New(client, &stubFreezer{}, "")
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +235,7 @@ func TestSupervise_TransitionsToStopped(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	m := New(client, &stubFreezer{}).(*manager)
+	m := New(client, &stubFreezer{}, "").(*manager)
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +274,7 @@ func TestSupervise_TransitionsToFailed(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	m := New(client, &stubFreezer{}).(*manager)
+	m := New(client, &stubFreezer{}, "").(*manager)
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +361,7 @@ func TestSweep_RemovesOrphans(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	m := New(client, &stubFreezer{}).(*manager)
+	m := New(client, &stubFreezer{}, "").(*manager)
 	// Seed the in-memory map with the known pod. We do this by
 	// inserting directly so we don't have to run Start's argv
 	// pipeline (which would also call `podman run`).
@@ -405,7 +408,7 @@ func TestSweep_EmptyWhenNoContainers(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	m := New(client, &stubFreezer{}).(*manager)
+	m := New(client, &stubFreezer{}, "").(*manager)
 	res, err := m.Sweep(context.Background())
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
@@ -432,7 +435,7 @@ func TestSweep_IgnoresForeignContainers(t *testing.T) {
 			return nil, nil, nil
 		},
 	}
-	m := New(client, &stubFreezer{}).(*manager)
+	m := New(client, &stubFreezer{}, "").(*manager)
 	res, err := m.Sweep(context.Background())
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
@@ -445,6 +448,178 @@ func TestSweep_IgnoresForeignContainers(t *testing.T) {
 	for _, c := range client.Calls() {
 		if c[0] == "rm" && contains(joinArgs(c), foreign) {
 			t.Errorf("Sweep touched foreign container %q", foreign)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// M2-T3: token-dir lifecycle tests.
+// ---------------------------------------------------------------------------
+
+// TestStart_WritesTokenFile asserts that when the manager has a
+// tokenBase, Start creates <tokenBase>/<jobID>/token with the token
+// the spec will be bound to, and that the spec.Token and spec.TokenDir
+// fields are populated before the client.Run call so the bind-mount
+// argv includes the right path.
+func TestStart_WritesTokenFile(t *testing.T) {
+	base := t.TempDir()
+	client := &fakeClient{}
+	m := New(client, &stubFreezer{}, base)
+
+	spec := validSpec()
+	// Force the spec to start with no token — the manager must
+	// generate one because tokenBase is set.
+	spec.Token = ""
+	spec.TokenDir = ""
+
+	if _, err := m.Start(context.Background(), spec); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// The token file must exist under <base>/<jobID>/token.
+	dir := filepath.Join(base, goodID)
+	path := filepath.Join(dir, tokenFileName)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading token file: %v", err)
+	}
+	if len(got) != 32 {
+		t.Errorf("token file content length = %d, want 32 hex chars", len(got))
+	}
+	if _, err := hex.DecodeString(string(got)); err != nil {
+		t.Errorf("token file content is not hex: %v", err)
+	}
+
+	// The bind-mount argv must reference the same dir.
+	calls := client.Calls()
+	if len(calls) < 1 {
+		t.Fatal("no client calls")
+	}
+	joined := joinArgs(calls[0])
+	if !contains(joined, dir) {
+		t.Errorf("argv missing token dir %q\ngot: %s", dir, joined)
+	}
+	if !contains(joined, "/run/athanor") {
+		t.Errorf("argv missing bind target /run/athanor\ngot: %s", joined)
+	}
+}
+
+// TestStart_RemovesTokenDirOnClientFailure asserts that if podman
+// rejects the run, the token dir we just created does not leak to
+// disk. The fail-closed posture is part of the security contract.
+func TestStart_RemovesTokenDirOnClientFailure(t *testing.T) {
+	base := t.TempDir()
+	client := &fakeClient{
+		responder: func(args []string) (stdout, stderr []byte, err error) {
+			return nil, nil, errors.New("simulated podman failure")
+		},
+	}
+	m := New(client, &stubFreezer{}, base)
+
+	spec := validSpec()
+	spec.Token = ""
+	spec.TokenDir = ""
+
+	_, err := m.Start(context.Background(), spec)
+	if err == nil {
+		t.Fatal("Start succeeded unexpectedly; want error from fake podman")
+	}
+
+	dir := filepath.Join(base, goodID)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("token dir %q still exists after failed Start: stat err = %v", dir, err)
+	}
+}
+
+// TestStart_RejectsPartialToken asserts that the "Token without
+// TokenDir" or "TokenDir without Token" combinations are rejected
+// with ErrInvalidSpec. The two must travel together; otherwise the
+// bind mount would either fail or — worse — succeed with the wrong
+// contents.
+func TestStart_RejectsPartialToken(t *testing.T) {
+	cases := []struct {
+		name        string
+		token, dir  string
+	}{
+		{"token only", "deadbeef", ""},
+		{"dir only", "", "/tmp/whatever"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeClient{}
+			m := New(client, &stubFreezer{}, "")
+			spec := validSpec()
+			spec.Token = tc.token
+			spec.TokenDir = tc.dir
+			_, err := m.Start(context.Background(), spec)
+			if !errors.Is(err, ErrInvalidSpec) {
+				t.Errorf("err = %v, want ErrInvalidSpec", err)
+			}
+			if len(client.Calls()) != 0 {
+				t.Errorf("client called %d times for invalid spec, want 0", len(client.Calls()))
+			}
+		})
+	}
+}
+
+// TestStop_RemovesTokenDir asserts that Stop removes the per-job
+// token dir, regardless of whether podman rm -f succeeded.
+func TestStop_RemovesTokenDir(t *testing.T) {
+	base := t.TempDir()
+	client := &fakeClient{}
+	m := New(client, &stubFreezer{}, base)
+
+	spec := validSpec()
+	spec.Token = ""
+	spec.TokenDir = ""
+
+	if _, err := m.Start(context.Background(), spec); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	dir := filepath.Join(base, goodID)
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("token dir missing after Start: %v", err)
+	}
+	if err := m.Stop(context.Background(), goodID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("token dir %q still exists after Stop: stat err = %v", dir, err)
+	}
+}
+
+// TestToken_NotInPodmanArgv asserts the token never appears in the
+// argv the daemon hands to podman. The token is on disk; only the
+// bind-mount path appears in argv. This is the structural proof
+// that the token is not exfiltrated through the podman command
+// line (visible in process listings).
+func TestToken_NotInPodmanArgv(t *testing.T) {
+	base := t.TempDir()
+	client := &fakeClient{}
+	m := New(client, &stubFreezer{}, base)
+
+	spec := validSpec()
+	spec.Token = ""
+	spec.TokenDir = ""
+
+	if _, err := m.Start(context.Background(), spec); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Read the token from disk — that's the value we must NOT see
+	// in any client.Run argv.
+	tokenPath := filepath.Join(base, goodID, tokenFileName)
+	tokBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("reading token: %v", err)
+	}
+	tok := string(tokBytes)
+
+	for i, call := range client.Calls() {
+		for j, arg := range call {
+			if contains(arg, tok) {
+				t.Errorf("token %q appeared in client.Run argv at call %d arg %d (%q); the token must never enter podman's argv", tok, i, j, arg)
+			}
 		}
 	}
 }

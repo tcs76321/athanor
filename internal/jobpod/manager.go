@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,25 +23,41 @@ const podmanInspectFormat = "{{.State.Status}} {{.State.ExitCode}}"
 
 // manager is the production Manager impl. Concurrency-safe.
 type manager struct {
-	client  Client
-	freezer Freezer
-	mu      sync.RWMutex
-	pods    map[string]*podEntry
+	client    Client
+	freezer   Freezer
+	tokenBase string // base dir for per-job token dirs; <state-dir>/tokens
+	mu        sync.RWMutex
+	pods      map[string]*podEntry
 }
 
 type podEntry struct {
-	pod   *Pod
-	stopC chan struct{} // closed by the supervisor when the pod terminates
+	pod      *Pod
+	stopC    chan struct{} // closed by the supervisor when the pod terminates
+	tokenDir string        // host dir bind-mounted to /run/athanor; "" if no token
 }
 
 // New returns a Manager ready for use. The supervisor goroutines
 // start lazily on the first Start call and stop when the pod's
 // state transitions to a terminal state (M2-T5 expands the test).
-func New(client Client, freezer Freezer) Manager {
+//
+// tokenBase is the host directory under which per-job token dirs are
+// created (typically <state-dir>/tokens). The base is created with
+// 0700 perms at construction. An empty string disables token-dir
+// generation; tests that do not exercise tokens may pass "".
+func New(client Client, freezer Freezer, tokenBase string) Manager {
+	if tokenBase != "" {
+		// Best-effort: if MkdirAll fails here, the first Start
+		// that needs a token dir will surface the error. We do
+		// not return an error from New to keep the existing
+		// call sites (which don't expect a constructor error)
+		// unchanged.
+		_ = os.MkdirAll(tokenBase, 0o700)
+	}
 	return &manager{
-		client:  client,
-		freezer: freezer,
-		pods:    map[string]*podEntry{},
+		client:    client,
+		freezer:   freezer,
+		tokenBase: tokenBase,
+		pods:      map[string]*podEntry{},
 	}
 }
 
@@ -66,10 +83,15 @@ func (m *manager) validateSpec(spec Spec) error {
 //  1. validate the spec (no client call yet)
 //  2. check the freezer (§22.1)
 //  3. check for duplicate ID
-//  4. build the argv
-//  5. invoke the client (podman run --detach)
-//  6. register the pod in the in-memory map
-//  7. start the supervisor goroutine
+//  4. generate a token dir if the spec doesn't supply one (M2-T3)
+//  5. build the argv
+//  6. invoke the client (podman run --detach)
+//  7. register the pod in the in-memory map (with tokenDir for
+//     teardown)
+//  8. start the supervisor goroutine
+//
+// On any failure between step 4 and step 7 the token dir is removed
+// so it doesn't leak to disk.
 func (m *manager) Start(ctx context.Context, spec Spec) (*Pod, error) {
 	if err := m.validateSpec(spec); err != nil {
 		return nil, err
@@ -85,13 +107,40 @@ func (m *manager) Start(ctx context.Context, spec Spec) (*Pod, error) {
 	}
 	m.mu.Unlock()
 
+	// Step 4: token dir. If the spec supplies both Token and
+	// TokenDir we trust the caller (engine passes a pre-issued
+	// pair in the M2-T4 path). If only one is set we reject —
+	// the two must travel together or not at all. If neither is
+	// set and the manager has a tokenBase, we generate a fresh
+	// dir + token.
+	tokenDir := spec.TokenDir
+	switch {
+	case spec.Token == "" && spec.TokenDir == "":
+		if m.tokenBase != "" {
+			dir, tok, err := NewTokenDir(m.tokenBase, spec.ID)
+			if err != nil {
+				return nil, fmt.Errorf("generating token dir: %w", err)
+			}
+			tokenDir = dir
+			spec.Token = tok
+			spec.TokenDir = dir
+		}
+	case spec.Token != "" && spec.TokenDir != "":
+		// Caller-supplied: trust it. (M2-T4 will pass these
+		// through from a separate TokenIssuer.)
+	default:
+		return nil, fmt.Errorf("%w: Token and TokenDir must both be set or both empty", ErrInvalidSpec)
+	}
+
 	args := buildArgs(spec)
 	if _, _, err := m.client.Run(ctx, args...); err != nil {
+		// Pod didn't come up; remove any token dir we created.
+		_ = RemoveTokenDir(tokenDir)
 		return nil, fmt.Errorf("podman run: %w", err)
 	}
 
 	pod := &Pod{ID: spec.ID, State: StatePending}
-	entry := &podEntry{pod: pod, stopC: make(chan struct{})}
+	entry := &podEntry{pod: pod, stopC: make(chan struct{}), tokenDir: tokenDir}
 
 	m.mu.Lock()
 	m.pods[spec.ID] = entry
@@ -104,8 +153,22 @@ func (m *manager) Start(ctx context.Context, spec Spec) (*Pod, error) {
 // supervise polls `podman inspect` until the container reports
 // `exited` or `stopped`, then updates the in-memory Pod. Polling
 // is the simplest correct primitive; events are M2-T5 territory.
+// On a terminal-state observation the per-job token dir is removed
+// — the container is gone and the secret should not outlive it.
 func (m *manager) supervise(ctx context.Context, id string, entry *podEntry) {
 	defer close(entry.stopC)
+	// defer the token-dir removal so it runs whether we exit via
+	// terminal state, ctx cancellation, or a panic. Stop is a
+	// separate path and removes the dir itself.
+	defer func() {
+		// Re-read entry.tokenDir under the lock: a concurrent
+		// Stop may have already cleared it. Either way, removing
+		// a missing dir is a no-op.
+		m.mu.RLock()
+		td := entry.tokenDir
+		m.mu.RUnlock()
+		_ = RemoveTokenDir(td)
+	}()
 	ticker := time.NewTicker(supervisionInterval)
 	defer ticker.Stop()
 	for {
@@ -154,10 +217,12 @@ func (m *manager) setState(id string, state State, exitErr error) {
 
 // Stop force-removes a pod. Idempotent: stopping a stopped pod is
 // a no-op. Returns ErrNotFound for an unknown ID. Stops do not
-// consult the freezer — teardown must always be possible.
+// consult the freezer — teardown must always be possible. On a
+// successful (or failed-but-proceeding) Stop the per-job token dir
+// is removed so secrets don't outlive the pod.
 func (m *manager) Stop(ctx context.Context, id string) error {
 	m.mu.RLock()
-	_, exists := m.pods[id]
+	entry, exists := m.pods[id]
 	m.mu.RUnlock()
 	if !exists {
 		return ErrNotFound
@@ -168,6 +233,10 @@ func (m *manager) Stop(ctx context.Context, id string) error {
 		// regardless so future Stop calls are no-ops.
 		slog.Warn("jobpod: stop failed; removing from in-memory map", "pod", id, "err", err)
 	}
+	// Remove the token dir regardless of whether podman rm
+	// succeeded. The container is gone from our map; the
+	// directory's job is done.
+	_ = RemoveTokenDir(entry.tokenDir)
 	m.mu.Lock()
 	delete(m.pods, id)
 	m.mu.Unlock()

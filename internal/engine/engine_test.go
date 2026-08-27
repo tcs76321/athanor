@@ -58,6 +58,7 @@ type testEnv struct {
 	freezer   *control.KillSwitch
 	ollama    *countingOllama
 	eng       *Engine
+	runner    *fakeRunner
 }
 
 func newEnv(t *testing.T) *testEnv {
@@ -98,9 +99,10 @@ func newEnvWithCfg(t *testing.T, mutate func(*config.Config)) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng := New(cfg, db, jobs, projects, artifacts, llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil))
+	runner := newFakeRunner()
+	eng := New(cfg, db, jobs, projects, artifacts, llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil), runner)
 	return &testEnv{cfg: cfg, db: db, jobs: jobs, projects: projects, artifacts: artifacts,
-		freezer: freezer, ollama: ollama, eng: eng}
+		freezer: freezer, ollama: ollama, eng: eng, runner: runner}
 }
 
 // submit creates a project with a text goal and its queued job. Names are
@@ -109,10 +111,26 @@ var submitSeq int
 
 func (e *testEnv) submit(t *testing.T) (jobID string) {
 	t.Helper()
+	return e.submitArchetype(t, "text", "Write a short essay about local-first software.")
+}
+
+// submitCode is the M2-T4 counterpart: a code-archetype project
+// that the engine will route through runCodeInPod and
+// runTestsInPod. The goal text satisfies the project's
+// goalMinLen (20 chars).
+func (e *testEnv) submitCode(t *testing.T) (jobID string) {
+	t.Helper()
+	return e.submitArchetype(t, "code", "Write a Python module that manages a personal book collection with add, list, and search functions.")
+}
+
+// submitArchetype is the shared implementation; submit and
+// submitCode are thin wrappers that pin the two archetypes the
+// engine tests actually care about.
+func (e *testEnv) submitArchetype(t *testing.T, archetype, goal string) (jobID string) {
+	t.Helper()
 	submitSeq++
 	_, task, err := e.projects.Create(context.Background(),
-		fmt.Sprintf("demo-%d", submitSeq), "text",
-		"Write a short essay about local-first software.", nil)
+		fmt.Sprintf("demo-%s-%d", archetype, submitSeq), archetype, goal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +220,7 @@ func TestEnqueueRespectsConcurrencyCap(t *testing.T) {
 	// Cap = 1: the engine must hold at most one in-flight job goroutine.
 	cap := fixedCap{n: 1}
 	eng := New(cfg, db, job.NewRepository(db), project.NewRepo(db), artifacts,
-		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, cap)
+		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, cap, newFakeRunner())
 
 	// Submit two jobs. The first enters the LLM call (blocked on `hang`).
 	// The second must wait in Enqueue's poll loop.

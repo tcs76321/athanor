@@ -38,6 +38,21 @@ const (
 // chain.
 var ErrUnknownTool = errors.New("toolenvelope: unknown tool")
 
+// ErrToolDisallowed is the typed sentinel the internal API and
+// the engine use to communicate "the request was well-formed and
+// authenticated, but the per-job envelope does not include the
+// requested tool". The internal API returns 403 with this error
+// text; the engine matches it with errors.Is and treats it as a
+// soft-fail (continue to comparing). M3-T2 will turn soft-fails
+// into HITL escalations.
+//
+// Defined here (in the toolenvelope package) so the engine and
+// the internal API agree on a single sentinel without an import
+// cycle: the engine imports toolenvelope; the internal API
+// imports toolenvelope; the runner package (which sits between
+// them) is the one that returns the sentinel.
+var ErrToolDisallowed = errors.New("toolenvelope: tool not in job envelope")
+
 // Envelope is the per-job tool allowlist. It is a value type built
 // from a fixed set at construction time; once built, it is read-only.
 // The zero value is an empty envelope (no tools allowed) — a valid

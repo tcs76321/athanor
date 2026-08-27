@@ -61,7 +61,7 @@ func TestRecoverResumesMidFlightJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Run up to synthesizing, then "crash" (drop the engine, keep state).
-	eng1 := New(cfg, db, jobs, projects, artifacts, llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil))
+	eng1 := New(cfg, db, jobs, projects, artifacts, llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil), newFakeRunner())
 	for {
 		cur, err := jobs.Get(context.Background(), j.ID)
 		if err != nil {
@@ -90,7 +90,7 @@ func TestRecoverResumesMidFlightJob(t *testing.T) {
 	jobs2 := job.NewRepository(db2)
 	artifacts2 := artifact.NewStore(db2, filepath.Join(dir, "artifacts"))
 	eng2 := New(cfg, db2, jobs2, project.NewRepo(db2), artifacts2,
-		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil))
+		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil), newFakeRunner())
 	eng2.Recover(context.Background())
 
 	deadline := time.Now().Add(15 * time.Second)
@@ -169,7 +169,7 @@ func TestRecoverResumesJob_ArtifactWrittenBeforeTransition(t *testing.T) {
 	freezer2, _ := control.NewKillSwitch(db2)
 	registry, _ := llm.NewRegistry(env.cfg.Personas)
 	eng2 := New(env.cfg, db2, jobs2, project.NewRepo(db2), artifacts2,
-		llm.NewClient(env.cfg.Inference.OllamaURL, nil), registry, freezer2, power.NewPowerManager(nil))
+		llm.NewClient(env.cfg.Inference.OllamaURL, nil), registry, freezer2, power.NewPowerManager(nil), newFakeRunner())
 	eng2.Recover(context.Background())
 
 	// Wait for completion. Recovery must version the existing final

@@ -62,7 +62,13 @@ func newHarness(t *testing.T) *harness {
 	}
 	eng := engine.New(cfg, st, jobs, projects, artifacts,
 		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer,
-		power.NewPowerManager(nil))
+		power.NewPowerManager(nil),
+		// M2-T4: the api harness exercises the M1 walking
+		// skeleton only. A nil runner makes the code-archetype
+		// sub-steps short-circuit to "skipped" with no HTTP
+		// call; text/document/data/media archetypes skip
+		// them entirely.
+		nil)
 
 	srv := server.New("test")
 	srv.SetControl(freezer)

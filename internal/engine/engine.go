@@ -32,6 +32,7 @@ import (
 	"github.com/tcs76321/athanor/internal/llm"
 	"github.com/tcs76321/athanor/internal/project"
 	"github.com/tcs76321/athanor/internal/store"
+	"github.com/tcs76321/athanor/internal/toolenvelope"
 )
 
 // Freezer is the kill-switch surface the engine consults (§22.1: frozen
@@ -50,6 +51,29 @@ type ConcurrencyCap interface {
 	MaxConcurrentJobs() int
 }
 
+// ToolRunner is the engine's window onto the internal API
+// (ROADMAP M2-T4, ADR-0009). The production impl is
+// internal/internalapi/runner.HTTPClient; tests pass a fake. The
+// interface is the structural seam that lets M3-T2 drop in
+// EvaluationRecord capture without changing call sites.
+//
+// A nil ToolRunner is a valid configuration: the engine
+// short-circuits the code-archetype sub-steps without making any
+// HTTP call, and the job completes via the M1 walking skeleton.
+// This is what unit tests use to keep the M1 path runnable
+// without a Job Pod manager.
+type ToolRunner interface {
+	// RunCode executes language+code inside the job's pod and
+	// returns the result. The implementation is responsible
+	// for auth (bearer token), timeout enforcement, and the
+	// per-job envelope check (this method is only called for
+	// tools the envelope allows).
+	RunCode(ctx context.Context, jobID string, req toolenvelope.ExecuteRequest) (toolenvelope.ExecuteResult, error)
+	// RunTests runs the test command in the job's pod. Same
+	// contract as RunCode.
+	RunTests(ctx context.Context, jobID string, req toolenvelope.ExecuteRequest) (toolenvelope.ExecuteResult, error)
+}
+
 // ErrPaused reports that the job was paused instead of failed — the
 // context floor was violated (recommend-or-escalate, §12.3) or the kill
 // switch froze the daemon mid-run.
@@ -66,22 +90,34 @@ type Engine struct {
 	registry  *llm.Registry
 	freezer   Freezer
 	cap       ConcurrencyCap
+	// runner is the engine's window onto the Job Pod internal
+	// API (M2-T4). nil means "no Job Pod manager"; the code
+	// archetype's sub-steps short-circuit without HTTP calls.
+	// Production wires *internalapi/runner.HTTPClient; tests
+	// pass a fake.
+	runner ToolRunner
 	// inFlight is the count of running job goroutines. The cap is
 	// read from cap.MaxConcurrentJobs() on every Enqueue; the atomic
 	// counter is the only source of truth for the running count.
 	// We use a counter (not a channel) so the cap can change without
 	// reallocating the semaphore mid-flight.
-	inFlight  int64
-	mu        sync.Mutex // guards running set to avoid double-running a job
-	running   map[string]bool
+	inFlight int64
+	mu       sync.Mutex // guards running set to avoid double-running a job
+	running  map[string]bool
 }
 
 // New wires an engine. Concurrency is bounded by cap.MaxConcurrentJobs,
 // read live on every Enqueue so the power profile can throttle the
 // engine without a restart.
+//
+// runner is the engine's window onto the Job Pod internal API
+// (M2-T4). A nil runner is valid: code-archetype sub-steps
+// short-circuit without HTTP calls, and the M1 walking skeleton
+// remains usable in unit tests without a pod manager. Production
+// wires *internal/internalapi/runner.HTTPClient.
 func New(cfg *config.Config, db *store.Store, jobs *job.Repository, projects *project.Repo,
 	artifacts *artifact.Store, client *llm.Client, registry *llm.Registry, freezer Freezer,
-	cap ConcurrencyCap) *Engine {
+	cap ConcurrencyCap, runner ToolRunner) *Engine {
 	if cap == nil {
 		// No power source: fall back to a static cap derived from
 		// cfg.Limits so the engine remains usable in tests and
@@ -91,6 +127,7 @@ func New(cfg *config.Config, db *store.Store, jobs *job.Repository, projects *pr
 	return &Engine{
 		cfg: cfg, db: db, jobs: jobs, projects: projects, artifacts: artifacts,
 		client: client, registry: registry, freezer: freezer, cap: cap,
+		runner:  runner,
 		running: map[string]bool{},
 	}
 }

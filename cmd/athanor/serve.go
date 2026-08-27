@@ -18,6 +18,7 @@ import (
 	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/engine"
 	"github.com/tcs76321/athanor/internal/internalapi"
+	"github.com/tcs76321/athanor/internal/internalapi/runner"
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/jobpod"
 	"github.com/tcs76321/athanor/internal/llm"
@@ -122,6 +123,13 @@ func run(configPath, addr, stateDir string) error {
 	} else if res.Removed > 0 {
 		fmt.Printf("athanor: swept %d orphan pod(s) at startup\n", res.Removed)
 	}
+	// Resolve the loopback listen address once, before any
+	// component that needs it. The engine's ToolRunner (M2-T4)
+	// uses it as the base URL for the internal API.
+	loopAddr, err := server.LocalhostAddr(addr)
+	if err != nil {
+		return err
+	}
 	eng := engine.New(cfg, st,
 		job.NewRepository(st),
 		project.NewRepo(st),
@@ -130,12 +138,13 @@ func run(configPath, addr, stateDir string) error {
 		registry,
 		killSwitch,
 		powerMgr,
+		// M2-T4: the engine's window onto the internal API.
+		// It authenticates each call with the per-job bearer
+		// token retrieved from the Job Pod manager, so the
+		// engine is just another client of the loopback
+		// internal API (ADR-0009 D5).
+		runner.New("http://"+loopAddr, podMgr),
 	)
-
-	loopAddr, err := server.LocalhostAddr(addr)
-	if err != nil {
-		return err
-	}
 	srv := server.New(version)
 	srv.SetControl(killSwitch)
 	api.New(project.NewRepo(st), job.NewRepository(st),

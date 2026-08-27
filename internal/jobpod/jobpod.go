@@ -102,6 +102,12 @@ type Manager interface {
 	Stop(ctx context.Context, id string) error
 	// Get returns the manager's current view of a pod. No I/O.
 	Get(id string) (*Pod, error)
+	// TokenFor returns the active token for a job ID, or
+	// ErrTokenNotFound if no active pod exists for that ID. Used
+	// by the internal API auth middleware to verify the bearer
+	// presented by a Job Pod. The returned string is the secret
+	// itself; callers must not log it.
+	TokenFor(jobID string) (string, error)
 	// Sweep force-removes any athanor-job-* container the manager
 	// did not start itself. Called once at daemon boot (M2-T5
 	// expands the test).

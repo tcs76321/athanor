@@ -34,6 +34,7 @@ type podEntry struct {
 	pod      *Pod
 	stopC    chan struct{} // closed by the supervisor when the pod terminates
 	tokenDir string        // host dir bind-mounted to /run/athanor; "" if no token
+	token    string        // the per-job secret; never logged
 }
 
 // New returns a Manager ready for use. The supervisor goroutines
@@ -140,7 +141,12 @@ func (m *manager) Start(ctx context.Context, spec Spec) (*Pod, error) {
 	}
 
 	pod := &Pod{ID: spec.ID, State: StatePending}
-	entry := &podEntry{pod: pod, stopC: make(chan struct{}), tokenDir: tokenDir}
+	entry := &podEntry{
+		pod:      pod,
+		stopC:    make(chan struct{}),
+		tokenDir: tokenDir,
+		token:    spec.Token,
+	}
 
 	m.mu.Lock()
 	m.pods[spec.ID] = entry
@@ -252,6 +258,22 @@ func (m *manager) Get(id string) (*Pod, error) {
 		return nil, ErrNotFound
 	}
 	return &Pod{ID: entry.pod.ID, State: entry.pod.State, ExitErr: entry.pod.ExitErr}, nil
+}
+
+// TokenFor returns the active token for a job ID, or
+// ErrTokenNotFound if no active pod exists. The returned string is
+// the secret itself; the internal API auth middleware is the only
+// caller, and it must not log the value. Returns an empty string
+// when the entry exists but has no token (e.g. a pod started with
+// Token==""), which the middleware treats as an auth failure.
+func (m *manager) TokenFor(jobID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.pods[jobID]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return entry.token, nil
 }
 
 // parseInspect splits `podman inspect` output into (status, exitCode).

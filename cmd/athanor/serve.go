@@ -17,6 +17,7 @@ import (
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/engine"
+	"github.com/tcs76321/athanor/internal/internalapi"
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/jobpod"
 	"github.com/tcs76321/athanor/internal/llm"
@@ -140,6 +141,13 @@ func run(configPath, addr, stateDir string) error {
 	api.New(project.NewRepo(st), job.NewRepository(st),
 		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
 		eng, killSwitch, st).Register(srv.Mux())
+	// M2-T3: internal API for Job Pods. Same loopback HTTP server,
+	// different path prefix (/internal/v1/), every route wrapped in
+	// authMiddleware. Token store is the jobpod.Manager's in-memory
+	// map of podID → token, adapted to the internalapi.TokenStore
+	// shape (ErrNotFound → ErrTokenNotFound). Structural proof is
+	// Gate G2 (internal/gate/gate_g2_test.go).
+	internalapi.New(tokenStoreAdapter{podMgr}, project.NewRepo(st), st).Register(srv.Mux())
 
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),

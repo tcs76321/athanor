@@ -37,6 +37,16 @@ var allowedSyscallIdents = map[string]bool{
 	"SIGTERM": true, "SIGINT": true, "SIGHUP": true, "SIGQUIT": true,
 }
 
+// allowedOsExecFiles are the specific files in cmd/ that may import
+// os/exec. M2-T2 introduces the production Podman client
+// (cmd/athanor/jobpod_client.go) which legitimately shells out to
+// the `podman` binary. The gate still forbids os/exec in internal/
+// and in any other cmd/ file; this list is the named exception, not
+// a general permission.
+var allowedOsExecFiles = map[string]bool{
+	"jobpod_client.go": true,
+}
+
 // TestGateG1NoToolExecution is the grep-level proof, upgraded to an AST
 // walk: no production source under internal/ or cmd/ may import a
 // tool-execution capability. The llm client's net/http and the daemon's
@@ -69,8 +79,15 @@ func TestGateG1NoToolExecution(t *testing.T) {
 			for _, imp := range file.Imports {
 				name := strings.Trim(imp.Path.Value, `"`)
 				if reason, bad := forbiddenImports[name]; bad {
-					t.Errorf("%s imports %q — %s", path, name, reason)
-					violations++
+					// os/exec is allowed in a small named set of
+					// cmd/ files (the production Podman client). The
+					// gate still forbids it everywhere else.
+					if name == "os/exec" && !root.internal && allowedOsExecFiles[filepath.Base(path)] {
+						// permitted
+					} else {
+						t.Errorf("%s imports %q — %s", path, name, reason)
+						violations++
+					}
 				}
 				if reason, bad := forbiddenInternalImports[name]; bad && root.internal {
 					t.Errorf("%s imports %q — %s", path, name, reason)

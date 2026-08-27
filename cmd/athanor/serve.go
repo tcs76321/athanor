@@ -18,6 +18,7 @@ import (
 	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/engine"
 	"github.com/tcs76321/athanor/internal/job"
+	"github.com/tcs76321/athanor/internal/jobpod"
 	"github.com/tcs76321/athanor/internal/llm"
 	"github.com/tcs76321/athanor/internal/logging"
 	"github.com/tcs76321/athanor/internal/power"
@@ -108,6 +109,18 @@ func run(configPath, addr, stateDir string) error {
 	// concurrency cap. M6 will add an OS watcher that switches
 	// profiles; for now it stays at the default (interactive).
 	powerMgr := power.NewPowerManager(nil)
+	// M2-T2: Job Pod manager. Owns the lifecycle of every Podman
+	// Job Pod. Sweep runs at boot to clean up after a crash or
+	// kill -9. Engine wiring is M2-T3/M2-T4 territory; this is
+	// the boot-time integration only.
+	podMgr := jobpod.New(NewExecClient(), killSwitch)
+	if res, err := podMgr.Sweep(context.Background()); err != nil {
+		// Sweep is opportunistic: a missing podman or a not-yet-
+		// started machine is logged, not fatal.
+		fmt.Fprintf(os.Stderr, "athanor: jobpod sweep failed: %v\n", err)
+	} else if res.Removed > 0 {
+		fmt.Printf("athanor: swept %d orphan pod(s) at startup\n", res.Removed)
+	}
 	eng := engine.New(cfg, st,
 		job.NewRepository(st),
 		project.NewRepo(st),

@@ -143,3 +143,24 @@ logging:
     - daydream
     - power
     - backup
+
+job_pod:
+  # Per-job tool envelope applied to every job that does not
+  # declare its own allowed_tools_json override. M2-T4 ships a
+  # closed set of two tools: execute_code, run_tests. Empty
+  # list = "no tools", which is the safe default — the engine
+  # still runs the LLM-only phases but no code or tests run
+  # in a pod until the operator opts in.
+  default_tools: []
+  # Image is required in production: the daemon refuses to
+  # start if this is empty (cmd/athanor/serve.go fails fast).
+  # The default here is intentionally empty so a fresh clone
+  # that copies this file to config.yaml surfaces the missing
+  # value with an actionable error, not a silent wrong-image
+  # selection.
+  image: ""
+  # Resource limits override the §21.2 defaults. Zero values
+  # mean "use jobpod's defaults" (pids=64, memory=512m, cpus=1.0).
+  pids_limit: 0
+  memory_mb: 0
+  cpus: 0

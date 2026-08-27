@@ -125,7 +125,7 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-### What works today (M0 + M1 + M2-T1 + M2-T2)
+### What works today (M0 + M1 + M2-T1 + M2-T2 + M2-T3 + M2-T4)
 
 - **Daemon on loopback** (`http://127.0.0.1:7420`). Config falls back to built-in defaults when `config.yaml` is absent; missing config is not an error on a fresh clone. `/healthz` reports status, version, uptime.
 - **CLI client.** `project create`, `goal submit`, `job watch`, `artifacts`, `freeze`, `unfreeze`. Talks to a running daemon over loopback.
@@ -134,12 +134,14 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 - **Kill switch.** `POST /freeze` freezes; `DELETE /freeze` unfreezes with a required reason. Frozen state persists in `system_state` and survives restarts.
 - **Crash recovery.** `kill -9` mid-job leaves a usable database; restart resumes from the last committed phase.
 - **Container spine scaffold.** `internal/jobpod` owns the Podman Job Pod lifecycle (Start/Stop/Get/Sweep), platform-split hardening flags (Linux seccomp, Darwin no-op), per-job token bind mount. Wired into daemon boot for a startup sweep of orphan pods.
+- **Internal API behind bearer tokens.** Job Pods authenticate to the daemon at `/internal/v1/` (job context, heartbeat, log, `execute_code`, `run_tests`) with a 16-byte random hex token bound to their job ID. Gate G2 (`internal/gate/gate_g2_test.go`) structurally proves every route is wrapped in `authMiddleware` and every tool handler consults the per-job envelope.
+- **Tool envelope (M2-T4).** The engine's `code`-archetype sub-steps (`runCodeInPod`, `runTestsInPod`) run the LLM's proposal in a Job Pod and persist the exit code, stdout, stderr, and duration as a code artifact. Disallowed tools are rejected with 403 and audited; the engine treats a `tool_disallowed` as a soft-fail (the M1 walking skeleton completes the job) and M3 will turn soft-fails into HITL escalations.
 - **Containment guarantee (Gate G1).** An AST-walking test in `internal/gate/gate_test.go` fails the build if any production source imports a tool-execution capability. The M1 agent is provably LLM + storage only. See [docs/demo-m1.md](docs/demo-m1.md).
 - **M1 quality probe** ran 2026-08-26 with `gemma4:12b-mlx`; 5/5 acceptance-criteria adherence across text/code/document archetypes. Findings: [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md).
 
 ### What's next (M2 finish)
 
-M2-T3 (per-job tokens + internal API), M2-T4 (wire Job Pods into the engine phase chain), M2-T5 (kill-9 integration test for zero-surviving-pods), M2-T6 (security suite on Linux and macOS). After M2-T6, the agent has actual tool execution in hardened, network-isolated, rootless containers with a verifiable security posture on both OSes.
+M2-T5 (kill-9 integration test for zero-surviving-pods), M2-T6 (security suite on Linux and macOS). After M2-T6, the agent has actual tool execution in hardened, network-isolated, rootless containers with a verifiable security posture on both OSes.
 
 ### What's deferred
 

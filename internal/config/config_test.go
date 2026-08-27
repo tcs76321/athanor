@@ -287,6 +287,9 @@ func TestExampleConfigMatchesDefaults(t *testing.T) {
 		if len(c.Logging.Categories) == 0 {
 			c.Logging.Categories = nil
 		}
+		if len(c.JobPod.DefaultTools) == 0 {
+			c.JobPod.DefaultTools = nil
+		}
 	}
 	if !reflect.DeepEqual(example, def) {
 		exJSON, _ := json.MarshalIndent(example, "", "  ")

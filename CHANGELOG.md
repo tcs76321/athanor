@@ -12,6 +12,32 @@ New entries are appended at the top. Do not rewrite history.
 
 ### M2 — Container Spine (continuing)
 
+- **M2-T4.** Internal API `execute_code` and `run_tests` routes
+  with a per-job tool envelope (ARCHITECTURE §25). Closed set of
+  two tools lands in `internal/toolenvelope`; per-task override
+  via `tasks.allowed_tools_json` (migration 0006); the handler
+  enforces the envelope server-side and returns 403 with an
+  audit event `tool_disallowed` on rejection. The engine
+  decides when to call (sub-steps in `phaseSynthesize` for the
+  `code` archetype; text/document/data/media skip them and
+  complete via the M1 walking skeleton). The production
+  `*internalapi/runner.HTTPClient` talks to the loopback
+  internal API with the per-job bearer token retrieved from
+  `jobpod.Manager.TokenFor(jobID)` — the engine is just
+  another client of the same surface. Decisions: ADR-0009.
+  Structural proof: Gate G2 extended in
+  `internal/gate/gate_g2_test.go`
+  (`TestGateG2ToolEnvelopeBypassImpossible` greps every
+  handler file for `a.tools.EnvelopeFor`; the route-count test
+  grows from 3 to 5 to cover the new routes). Behavior: 4
+  commits (`chore: add tool envelope package + per-job
+  allowlist config` `ef0f4b9`, `docs: ADR-0009 engine-pod-wiring`
+  `f7674a3`, `M2-T4: internal API execute_code + run_tests
+  routes with allowlist` `8ed7ee9`, `M2-T4: engine sub-step pod
+  execution + production wiring` `843e123`). All
+  internalapi + engine + project + gate tests green;
+  `make test-race` clean; Gate G1 still passes. No new
+  dependencies.
 - **M2-T3.** Per-job tokens (16-byte random hex, mounted at
   `/run/athanor/token` via the existing bind-mount argv) plus
   the `/internal/v1/` HTTP surface behind a bearer-token auth

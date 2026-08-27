@@ -45,6 +45,27 @@ purpose; details live in `ARCHITECTURE.md`, `ROADMAP.md`, and `DEVELOPMENT.md`.
 - Re-prove Gate G1 (`CGO_ENABLED=1 go test ./internal/gate/`) after any
   change to `internal/` that touches imports or the engine surface.
 
+## Commits — agent ↔ human handoff
+
+- The human signs every commit (GPG). The agent stages the
+  files, runs `make check`, and shows the staged diff and the
+  proposed commit message. The agent then runs `git commit -m
+  "<type>: <title>"` and the human types the GPG passphrase in
+  the same terminal. One commit per logical change; do not
+  batch unrelated work.
+- The agent must never use `--no-gpg-sign`, `git -c
+  commit.gpgsign=false`, `GIT_GPG_PROGRAM=true`, or any other
+  mechanism that bypasses the human's GPG signing. The
+  signature is the audit trail.
+- If a commit is malformed (wrong message, missing file),
+  reset with `git reset --soft HEAD~1` and re-stage. Do not
+  force-amend a signed commit.
+- For multi-commit work (e.g. a roadmap task broken into 5
+  commits per the plan), do one commit at a time: stage,
+  check, show diff, run `git commit`, wait for the human to
+  confirm the signature, then move to the next commit. Do not
+  pre-stage the next commit's changes while waiting.
+
 ## Plan mode
 
 - In plan mode: only read, search, and inspect. Do not edit files, run

@@ -1,0 +1,67 @@
+# Engine Throughput Baseline — M1
+
+**Captured:** 2026-08-27 (F5 foundation work)
+**Hardware:** Apple M2 Max (darwin/arm64, 12 cores visible to Go runtime)
+**Backend:** `mattn/go-sqlite3`, WAL, single connection (per ADR-0003/0004)
+**Ollama:** fake (no network, immediate response)
+
+## Benchmark: BenchmarkRunFullChain
+
+Runs the M1 phase chain end-to-end through the engine with a fake
+Ollama that responds immediately. Measures the engine's per-phase
+overhead (DB writes, prompt assembly, state transitions) plus the
+Enqueue poll — not LLM latency.
+
+### Results
+
+```
+goos: darwin
+goarch: arm64
+cpu: Apple M2 Max
+BenchmarkRunFullChain-12     10    2318179 ns/op
+```
+
+**Per-job wall time:** ~2.32 ms (excluding LLM latency).
+**Per-job LLM calls:** 3 (planning, diverging, synthesizing; comparing
+is deterministic in M1).
+**Per-job state transitions:** 6 (queued → context_building →
+planning → diverging → synthesizing → comparing → completed).
+**Per-job events written:** ~7 (job created + 6 transitions +
+optional comparison audit event).
+
+### Comparison expectations for M3
+
+M3 introduces multi-candidate divergence (N=3 by default). The
+per-phase cost should remain in the same order of magnitude. The
+multiplicative cost is N (3 candidates × per-phase cost). If the
+M3 single-phase cost is more than 2× the M1 single-phase cost,
+something has regressed — likely the prompt assembly, the artifact
+persistence, or the LLM call overhead.
+
+### How to reproduce
+
+```bash
+make bench
+```
+
+The benchmark runs 10 iterations of the full chain. For a larger
+sample, override `-benchtime`:
+
+```bash
+go test -bench=BenchmarkRunFullChain -benchtime=100x ./internal/engine/
+```
+
+### How to extend for M3
+
+When M3 lands, add a second benchmark in `internal/engine/bench_test.go`:
+
+```go
+func BenchmarkRunMultiCandidateChain(b *testing.B) {
+    // same setup as BenchmarkRunFullChain
+    // cfg.Execution.DivergenceCandidates = 3
+    // measure end-to-end M3 chain
+}
+```
+
+Compare the two numbers. M3 should be ~3× slower per job for the
+divergence phase alone; other phases should be unchanged.

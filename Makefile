@@ -8,7 +8,7 @@
 CGO_ENABLED = 1
 export CGO_ENABLED
 
-.PHONY: build test test-race vet tidy run clean
+.PHONY: build test test-race vet lint check tidy run clean hooks
 
 build:
 	go build -o bin/athanor ./cmd/athanor
@@ -25,8 +25,19 @@ test-race:
 vet:
 	go vet ./...
 
+lint:
+	golangci-lint run --timeout=5m
+
+# Aggregate gate; run before pushing. The pre-push hook also calls this.
+check: lint vet test-race
+
 tidy:
 	go mod tidy
 
 clean:
 	rm -rf state backups
+
+# Install the pre-push hook so CI lint/vet failures surface locally before
+# the push lands. Bypass with: git push --no-verify
+hooks:
+	bash scripts/install-hooks.sh

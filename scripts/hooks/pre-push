@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# pre-push hook for the Athanor repository.
+#
+# Refuses a push that would fail CI on lint or vet. Runs the same checks
+# CI does, locally, before the push lands — so a red CI run is caught
+# before round-tripping through the remote.
+#
+# Bypass with: git push --no-verify
+#
+# Installed by `make hooks` (scripts/install-hooks.sh). Re-run `make hooks`
+# after a fresh clone.
+
+set -e
+
+# Always run from the repo root, regardless of where `git push` was
+# invoked from.
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# CGO is required (mattn/go-sqlite3 — see Makefile, ADR 0003). The
+# Makefile already sets it, so prefer `make` for the checks.
+echo "pre-push: running make vet"
+make -s vet
+
+if command -v golangci-lint >/dev/null 2>&1; then
+	echo "pre-push: running make lint"
+	make -s lint
+else
+	echo "pre-push: golangci-lint not installed; skipping lint check."
+	echo "         Install it (e.g. 'brew install golangci-lint') to enable the local gate."
+	echo "         CI will still catch lint failures."
+fi

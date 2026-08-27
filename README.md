@@ -6,6 +6,8 @@
 
 **Local-first · Container-native · Semi-autonomous · Built to burn 24/7**
 
+**License: [AGPL-3.0](LICENSE)**
+
 </div>
 
 ---

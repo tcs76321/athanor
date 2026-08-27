@@ -289,7 +289,7 @@ func apiCall(method, url string, body any, out any) error {
 	if err != nil {
 		return fmt.Errorf("daemon unreachable at %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("daemon %s %s: %s", resp.Status, url, string(raw))
@@ -460,7 +460,7 @@ func writeResults(path string, results []Result) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	header := "| # | archetype | goal | criteria | job_id | total_s | plan_s | diverge_s | synth_s | compare_s | calls | prompt_tok | compl_tok | artifact_bytes | adherence | usefulness | notes |\n"
 	header += "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
 	if _, err := f.WriteString(header); err != nil {

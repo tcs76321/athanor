@@ -246,7 +246,12 @@ func TestAuthMiddleware_AcceptsValidToken(t *testing.T) {
 func TestAuthMiddleware_WrappedOnEveryRoute(t *testing.T) {
 	store := newFakeTokenStore()
 	mux := http.NewServeMux()
-	api := New(store)
+	// The handler-level deps are nil here because the wrapped-on-
+	// every-route test never lets a request reach a handler. If
+	// the middleware were ever bypassed for a route, the nil
+	// dereference would surface as a 500 (panic recovery) — but
+	// the real test is the 401 we get first.
+	api := New(store, nil, nil)
 	api.Register(mux)
 
 	routes := []struct {

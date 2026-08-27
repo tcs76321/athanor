@@ -1,6 +1,54 @@
 // Package gate encodes the milestone gates as executable proofs
 // (ROADMAP §3). Gate G1: "No tool execution exists at all — the agent is
 // provably contained to LLM + storage."
+//
+// # What Gate G1 proves
+//
+// This package fails the build if any production source file under
+// `internal/` or `cmd/` violates any of the following:
+//
+//  1. No tool-execution imports anywhere in production code. The forbidden
+//     set is `os/exec` (spawning processes), `os/user` (host user
+//     enumeration), `github.com/docker/docker/client` (container control),
+//     and `github.com/containers/podman/v5/libpod` (container control).
+//
+//  2. No raw `syscall` in agent code (`internal/`). The agent's own
+//     packages may not touch the syscall surface at all.
+//
+//  3. `syscall` in `cmd/` (the daemon entry point) is permitted only for
+//     signal constants — `SIGTERM`, `SIGINT`, `SIGHUP`, `SIGQUIT`. The
+//     test walks the AST and asserts every `syscall.X` selector in `cmd/`
+//     references one of the allowlisted identifiers.
+//
+//  4. `os/exec` in `cmd/` is permitted only for the named file
+//     `cmd/athanor/jobpod_client.go` (M2 production Podman client). The
+//     allowlist is a single named file, not a directory or pattern; the
+//     gate is opt-in by exception, not opt-out by default.
+//
+// The implementation is a single AST walk in TestGateG1NoToolExecution.
+// Adding a new forbidden import, a new tool surface, or a new syscall
+// identifier requires extending this test and updating this comment.
+//
+// # What Gate G1 does NOT prove
+//
+// Gate G1 is a structural containment guarantee, not a behavioral one.
+// It does not prove:
+//
+//   - That the LLM cannot be tricked into producing shell commands in
+//     its output. Behavioral containment against prompt injection is the
+//     job of the M4 prompt-injection scanner (incoming documents) and
+//     the M5-T3 byte-load `context_swap` tool, not this gate.
+//   - That the daemon's HTTP surface is safe. Loopback-only is enforced
+//     in `internal/server/server.go` (LocalhostAddr), and the tool
+//     surface is gated by Go route registration. The Go compiler and
+//     test coverage are the enforcement layer there.
+//   - That the SQLite layer is well-behaved under load. The single-
+//     connection pool and WAL mode are ADR-0003/0004 choices; performance
+//     is monitored separately.
+//
+// In short: Gate G1 says "the agent cannot call out to a shell or a
+// container client through any code path that this test can see." It
+// does not say "the agent is safe." Safety is the rest of the system.
 package gate
 
 import (

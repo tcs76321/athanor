@@ -66,6 +66,7 @@ type PowerManager struct {
 	watcher        OSWatcher
 	currentProfile Profile
 	limits         Limits
+	observers      []func(Limits)
 }
 
 // NewPowerManager creates a new PowerManager with the given OSWatcher.
@@ -135,6 +136,7 @@ func (pm *PowerManager) SetProfile(p Profile) {
 		return
 	}
 	pm.setProfileInternal(p)
+	pm.notifyObservers()
 }
 
 // ToggleAutonomousMode enables or disables autonomous mode.
@@ -157,6 +159,7 @@ func (pm *PowerManager) ToggleAutonomousMode(enabled bool) {
 	}
 
 	pm.setProfileInternal(newProfile)
+	pm.notifyObservers()
 }
 
 // CurrentProfile returns the current power profile.
@@ -165,4 +168,36 @@ func (pm *PowerManager) CurrentProfile() Profile {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	return pm.currentProfile
+}
+
+// MaxConcurrentJobs returns the current cap on concurrent jobs, sourced
+// from the active profile. Callers (the engine) consult this on every
+// enqueue so profile changes take effect immediately.
+func (pm *PowerManager) MaxConcurrentJobs() int {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	n := pm.limits.MaxConcurrentJobs
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// OnProfileChange registers an observer that fires after every profile
+// change with the new limits. Observers run synchronously under the
+// write lock; they should be quick. Safe to call from any goroutine.
+// M1-T8.4 wires the engine here; M6 will add the real OS watcher that
+// triggers profile changes.
+func (pm *PowerManager) OnProfileChange(fn func(Limits)) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.observers = append(pm.observers, fn)
+}
+
+// notifyObservers fires every registered observer with the new limits.
+// Caller must hold pm.mu (write lock).
+func (pm *PowerManager) notifyObservers() {
+	for _, fn := range pm.observers {
+		fn(pm.limits)
+	}
 }

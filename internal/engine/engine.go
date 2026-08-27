@@ -23,6 +23,8 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/config"
@@ -36,6 +38,16 @@ import (
 // means no work proceeds).
 type Freezer interface {
 	Frozen() bool
+}
+
+// ConcurrencyCap is the surface the engine reads on every Enqueue to
+// learn how many jobs may run in parallel (ROADMAP §24: the power
+// profile throttles background work; ARCHITECTURE §24: autonomous vs
+// interactive profiles). Satisfied by *power.PowerManager. The cap is
+// read live, not cached at construction time, so a profile change
+// takes effect on the next enqueue.
+type ConcurrencyCap interface {
+	MaxConcurrentJobs() int
 }
 
 // ErrPaused reports that the job was paused instead of failed — the
@@ -53,32 +65,69 @@ type Engine struct {
 	client    *llm.Client
 	registry  *llm.Registry
 	freezer   Freezer
-	sem       chan struct{}
+	cap       ConcurrencyCap
+	// inFlight is the count of running job goroutines. The cap is
+	// read from cap.MaxConcurrentJobs() on every Enqueue; the atomic
+	// counter is the only source of truth for the running count.
+	// We use a counter (not a channel) so the cap can change without
+	// reallocating the semaphore mid-flight.
+	inFlight  int64
 	mu        sync.Mutex // guards running set to avoid double-running a job
 	running   map[string]bool
 }
 
-// New wires an engine. Concurrency is bounded by cfg.Limits.MaxConcurrentJobs.
+// New wires an engine. Concurrency is bounded by cap.MaxConcurrentJobs,
+// read live on every Enqueue so the power profile can throttle the
+// engine without a restart.
 func New(cfg *config.Config, db *store.Store, jobs *job.Repository, projects *project.Repo,
-	artifacts *artifact.Store, client *llm.Client, registry *llm.Registry, freezer Freezer) *Engine {
-	max := cfg.Limits.MaxConcurrentJobs
-	if max < 1 {
-		max = 1
+	artifacts *artifact.Store, client *llm.Client, registry *llm.Registry, freezer Freezer,
+	cap ConcurrencyCap) *Engine {
+	if cap == nil {
+		// No power source: fall back to a static cap derived from
+		// cfg.Limits so the engine remains usable in tests and
+		// minimal configs.
+		cap = staticCap{max: cfg.Limits.MaxConcurrentJobs}
 	}
 	return &Engine{
 		cfg: cfg, db: db, jobs: jobs, projects: projects, artifacts: artifacts,
-		client: client, registry: registry, freezer: freezer,
-		sem:     make(chan struct{}, max),
+		client: client, registry: registry, freezer: freezer, cap: cap,
 		running: map[string]bool{},
 	}
 }
 
+// staticCap is the fallback ConcurrencyCap when no PowerManager is
+// wired. It returns a fixed value derived from cfg.Limits at construction.
+type staticCap struct{ max int }
+
+func (s staticCap) MaxConcurrentJobs() int {
+	if s.max < 1 {
+		return 1
+	}
+	return s.max
+}
+
 // Enqueue starts asynchronous execution of a job. Returns immediately;
-// callers watch progress through the job state and event log.
+// callers watch progress through the job state and event log. The
+// concurrency cap is read at enqueue time, not at construction, so
+// profile changes take effect immediately. We block on a goroutine-local
+// ticker until the in-flight count drops below the live cap, then run.
 func (e *Engine) Enqueue(jobID string) {
 	go func() {
-		e.sem <- struct{}{}
-		defer func() { <-e.sem }()
+		// Wait for a slot under the live cap. We poll with a short
+		// sleep rather than block on a condition variable: simpler,
+		// no missed-wakeup risk, the loop is cheap.
+		for {
+			max := e.cap.MaxConcurrentJobs()
+			if max < 1 {
+				max = 1
+			}
+			if atomic.LoadInt64(&e.inFlight) < int64(max) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		atomic.AddInt64(&e.inFlight, 1)
+		defer atomic.AddInt64(&e.inFlight, -1)
 		e.Run(context.Background(), jobID)
 	}()
 }

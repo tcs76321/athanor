@@ -20,6 +20,7 @@ import (
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/llm"
 	"github.com/tcs76321/athanor/internal/logging"
+	"github.com/tcs76321/athanor/internal/power"
 	"github.com/tcs76321/athanor/internal/project"
 	"github.com/tcs76321/athanor/internal/server"
 	"github.com/tcs76321/athanor/internal/store"
@@ -103,6 +104,10 @@ func run(configPath, addr, stateDir string) error {
 	if err != nil {
 		return fmt.Errorf("building persona registry: %w", err)
 	}
+	// M1-T8.4: PowerManager is the live source of the engine's
+	// concurrency cap. M6 will add an OS watcher that switches
+	// profiles; for now it stays at the default (interactive).
+	powerMgr := power.NewPowerManager(nil)
 	eng := engine.New(cfg, st,
 		job.NewRepository(st),
 		project.NewRepo(st),
@@ -110,6 +115,7 @@ func run(configPath, addr, stateDir string) error {
 		llm.NewClient(cfg.Inference.OllamaURL, nil),
 		registry,
 		killSwitch,
+		powerMgr,
 	)
 
 	loopAddr, err := server.LocalhostAddr(addr)

@@ -13,6 +13,7 @@ import (
 	"github.com/tcs76321/athanor/internal/engine"
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/llm"
+	"github.com/tcs76321/athanor/internal/power"
 	"github.com/tcs76321/athanor/internal/project"
 	"github.com/tcs76321/athanor/internal/server"
 	"github.com/tcs76321/athanor/internal/store"
@@ -60,7 +61,8 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	eng := engine.New(cfg, st, jobs, projects, artifacts,
-		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer)
+		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer,
+		power.NewPowerManager(nil))
 
 	srv := server.New("test")
 	srv.SetControl(freezer)

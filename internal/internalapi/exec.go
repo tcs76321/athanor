@@ -23,22 +23,11 @@ type executeCodeRequest struct {
 	Timeout  int    `json:"timeout_seconds"`
 }
 
-// executeCodeResponse is the JSON body of the route's response.
-type executeCodeResponse struct {
-	ExitCode   int    `json:"exit_code"`
-	Stdout     string `json:"stdout"`
-	Stderr     string `json:"stderr"`
-	DurationMS int64  `json:"duration_ms"`
-}
-
 // runTestsRequest is the body of POST /internal/v1/jobs/{id}/run_tests.
 type runTestsRequest struct {
 	Command string `json:"command"`
 	Timeout int    `json:"timeout_seconds"`
 }
-
-// runTestsResponse mirrors executeCodeResponse.
-type runTestsResponse = executeCodeResponse
 
 // handleExecuteCode is the M2-T4 /execute_code route. Steps:
 //  1. Parse body (400 on bad JSON or missing Code).

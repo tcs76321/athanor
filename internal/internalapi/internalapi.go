@@ -34,6 +34,14 @@ type TokenStore interface {
 // pod is registered for the requested job ID.
 var ErrTokenNotFound = errors.New("internalapi: no active token for job")
 
+// ErrToolDisallowed is the sentinel handleExecuteCode and
+// handleRunTests return (as a 403) when the per-job envelope
+// does not include the requested tool. The handler is the only
+// place this check runs; Gate G2's TestGateG2ToolEnvelopeBypassImpossible
+// structurally proves every execute_code/run_tests route references
+// the envelope lookup.
+var ErrToolDisallowed = errors.New("internalapi: tool not in job envelope")
+
 // writeJSON is the standard response writer: always JSON, UTF-8.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

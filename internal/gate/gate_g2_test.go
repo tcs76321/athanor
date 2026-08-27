@@ -126,6 +126,11 @@ func TestGateG2ConstantTimeComparePresent(t *testing.T) {
 // must match. We do not count occurrences of "/internal/v1/" in
 // the file because a path pattern + a comment can both mention
 // the prefix; counting Handle calls is unambiguous.
+//
+// M2-T4: the count grows from 3 to 5 (execute_code, run_tests).
+// This test was deliberately written to scale with the route
+// table — adding a new route without the middleware wrap fails
+// the structural check.
 func TestGateG2InternalAPIRoutesGoThroughMiddleware(t *testing.T) {
 	handlers := filepath.Join(internalapiDir, "handlers.go")
 	raw, err := os.ReadFile(handlers)
@@ -152,5 +157,69 @@ func TestGateG2InternalAPIRoutesGoThroughMiddleware(t *testing.T) {
 		t.Errorf("%s: %d mux.Handle calls but %d authMiddleware wraps; every route must be wrapped (Gate G2)",
 			handlers, handleCount, wrapCount)
 	}
+}
+
+// TestGateG2ToolEnvelopeBypassImpossible is the M2-T4 structural
+// defense against bypassing the per-job allowlist. Every route
+// handler that is registered for a tool name from the
+// internalapi closed set must reference a.tools.EnvelopeFor —
+// the only path the handler may use to decide whether the
+// request is allowed. A future refactor that reads the tool
+// name from the URL or the body and skips the envelope check
+// fails this test.
+//
+// The check is structural (text search): for each tool the
+// closed set contains, the handler file must reference
+// a.tools.EnvelopeFor. We assert presence rather than count
+// because a handler may reference EnvelopeFor once or twice
+// (e.g. once for ErrUnknownTool, once for Allows); both are
+// acceptable. The only failure mode we care about is "zero
+// references in the handler file".
+//
+// Note: the test reads handlers.go AND exec.go (the file
+// that owns the execute_code / run_tests handlers in M2-T4).
+// The exact file layout is documented in the plan; a future
+// refactor that splits the exec handlers into a different
+// file must extend this test deliberately.
+func TestGateG2ToolEnvelopeBypassImpossible(t *testing.T) {
+	// The handler logic lives in exec.go (M2-T4), not handlers.go.
+	// We walk the package to find every .go file that contains a
+	// tool name from the closed set and assert that file
+	// references a.tools.EnvelopeFor.
+	toolNames := []string{"execute_code", "run_tests"}
+	for _, name := range toolNames {
+		path, content, ok := findFileContaining(internalapiDir, name)
+		if !ok {
+			t.Errorf("could not find any .go file under %s containing %q; the handler must exist", internalapiDir, name)
+			continue
+		}
+		if !strings.Contains(content, "a.tools.EnvelopeFor") {
+			t.Errorf("%s handles %q but does not reference a.tools.EnvelopeFor; the per-job allowlist can be bypassed (Gate G2)", path, name)
+		}
+	}
+}
+
+// findFileContaining returns the first .go file (non-test) under
+// dir whose contents include needle. Used by Gate G2 to discover
+// the handler file for each closed-set tool.
+func findFileContaining(dir, needle string) (string, string, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", "", false
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(raw), needle) {
+			return path, string(raw), true
+		}
+	}
+	return "", "", false
 }
 

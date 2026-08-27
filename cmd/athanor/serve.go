@@ -141,13 +141,20 @@ func run(configPath, addr, stateDir string) error {
 	api.New(project.NewRepo(st), job.NewRepository(st),
 		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
 		eng, killSwitch, st).Register(srv.Mux())
-	// M2-T3: internal API for Job Pods. Same loopback HTTP server,
-	// different path prefix (/internal/v1/), every route wrapped in
-	// authMiddleware. Token store is the jobpod.Manager's in-memory
-	// map of podID → token, adapted to the internalapi.TokenStore
-	// shape (ErrNotFound → ErrTokenNotFound). Structural proof is
-	// Gate G2 (internal/gate/gate_g2_test.go).
-	internalapi.New(tokenStoreAdapter{podMgr}, project.NewRepo(st), st).Register(srv.Mux())
+	// M2-T3 + M2-T4: internal API for Job Pods. Same loopback HTTP
+	// server, different path prefix (/internal/v1/), every route
+	// wrapped in authMiddleware. Token store is the jobpod.Manager's
+	// in-memory map of podID → token, adapted to the
+	// internalapi.TokenStore shape (ErrNotFound → ErrTokenNotFound).
+	// The tool envelope lookup is the project repo, which loads
+	// the per-task override and falls back to the config default.
+	// Structural proof is Gate G2 (internal/gate/gate_g2_test.go).
+	defaultEnv, err := cfg.JobPodEnvelope()
+	if err != nil {
+		return fmt.Errorf("resolving job_pod.default_tools: %w", err)
+	}
+	internalapi.New(tokenStoreAdapter{podMgr}, project.NewRepo(st), st,
+		project.NewRepo(st), defaultEnv).Register(srv.Mux())
 
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/tcs76321/athanor/internal/toolenvelope"
 )
 
 // fakeTokenStore is a map-backed TokenStore for tests. Use
@@ -30,6 +32,37 @@ func (f *fakeTokenStore) Get(jobID string) (string, error) {
 		return "", ErrTokenNotFound
 	}
 	return tok, nil
+}
+
+// fakeToolEnv is a map-backed ToolEnvLookup for tests. WithAllow
+// grants a specific tool envelope to a job; Clear removes it.
+// Tests that want to exercise the "default envelope applies"
+// path set a default and never call WithAllow.
+type fakeToolEnv struct {
+	calls int
+	allow map[string]toolenvelope.Envelope
+}
+
+func newFakeToolEnv() *fakeToolEnv {
+	return &fakeToolEnv{allow: map[string]toolenvelope.Envelope{}}
+}
+
+func (f *fakeToolEnv) WithAllow(jobID string, env toolenvelope.Envelope) *fakeToolEnv {
+	f.allow[jobID] = env
+	return f
+}
+
+func (f *fakeToolEnv) Clear(jobID string) *fakeToolEnv {
+	delete(f.allow, jobID)
+	return f
+}
+
+func (f *fakeToolEnv) EnvelopeFor(_ context.Context, jobID string, defaultEnv toolenvelope.Envelope) (toolenvelope.Envelope, error) {
+	f.calls++
+	if env, ok := f.allow[jobID]; ok {
+		return env, nil
+	}
+	return defaultEnv, nil
 }
 
 // recorder is a minimal "did the handler run" sentinel. The
@@ -245,13 +278,14 @@ func TestAuthMiddleware_AcceptsValidToken(t *testing.T) {
 // never runs without a valid token.
 func TestAuthMiddleware_WrappedOnEveryRoute(t *testing.T) {
 	store := newFakeTokenStore()
+	tools := newFakeToolEnv()
 	mux := http.NewServeMux()
 	// The handler-level deps are nil here because the wrapped-on-
 	// every-route test never lets a request reach a handler. If
 	// the middleware were ever bypassed for a route, the nil
 	// dereference would surface as a 500 (panic recovery) — but
 	// the real test is the 401 we get first.
-	api := New(store, nil, nil)
+	api := New(store, nil, nil, tools, toolenvelope.Envelope{})
 	api.Register(mux)
 
 	routes := []struct {
@@ -260,6 +294,8 @@ func TestAuthMiddleware_WrappedOnEveryRoute(t *testing.T) {
 		{"GET", "/internal/v1/jobs/abc"},
 		{"POST", "/internal/v1/jobs/abc/heartbeat"},
 		{"POST", "/internal/v1/jobs/abc/log"},
+		{"POST", "/internal/v1/jobs/abc/execute_code"},
+		{"POST", "/internal/v1/jobs/abc/run_tests"},
 	}
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {

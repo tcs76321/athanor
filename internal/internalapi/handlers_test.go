@@ -11,6 +11,7 @@ import (
 
 	"github.com/tcs76321/athanor/internal/project"
 	"github.com/tcs76321/athanor/internal/store"
+	"github.com/tcs76321/athanor/internal/toolenvelope"
 	"github.com/tcs76321/athanor/migrations"
 )
 
@@ -24,6 +25,7 @@ type handlerTestEnv struct {
 	store  *store.Store
 	tokens *fakeTokenStore
 	repo   *project.Repo
+	tools  *fakeToolEnv
 }
 
 func newHandlerTestEnv(t *testing.T) *handlerTestEnv {
@@ -39,10 +41,15 @@ func newHandlerTestEnv(t *testing.T) *handlerTestEnv {
 	}
 	repo := project.NewRepo(st)
 	tokens := newFakeTokenStore()
-	api := New(tokens, repo, st)
+	tools := newFakeToolEnv()
+	// Default envelope is empty; tests that want to grant tools
+	// call env.tools.WithAllow(taskID, toolenvelope.Parse(...))
+	// explicitly. This mirrors the production default where
+	// config.job_pod.default_tools is an empty list.
+	api := New(tokens, repo, st, tools, toolenvelope.Envelope{})
 	mux := http.NewServeMux()
 	api.Register(mux)
-	return &handlerTestEnv{api: api, mux: mux, store: st, tokens: tokens, repo: repo}
+	return &handlerTestEnv{api: api, mux: mux, store: st, tokens: tokens, repo: repo, tools: tools}
 }
 
 // seedProject creates a project with a text goal and returns

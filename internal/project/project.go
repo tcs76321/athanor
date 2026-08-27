@@ -61,6 +61,13 @@ type Task struct {
 	Description string
 	Status      string
 	Criteria    []string
+	// AllowedTools is the optional per-task tool allowlist override
+	// (ROADMAP M2-T4, ARCHITECTURE §25). When non-empty it replaces
+	// config.job_pod.default_tools for this task's jobs. When empty
+	// the per-task override is "use the daemon default". Persisted
+	// as a JSON array string in tasks.allowed_tools_json
+	// (migration 0005).
+	AllowedTools []string
 }
 
 // Repo persists projects, goals, and tasks.

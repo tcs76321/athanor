@@ -31,8 +31,11 @@ purpose; details live in `ARCHITECTURE.md`, `ROADMAP.md`, and `DEVELOPMENT.md`.
 
 ## Work incrementally
 
-- Run `make vet` and `make test-race` after every commit, not at the end.
-  If something breaks, find the breaking commit, don't bisect.
+- Run `make check` (lint + vet + test-race) after every commit, not at the
+  end. If something breaks, find the breaking commit, don't bisect.
+- Run `make hooks` once after cloning to install the pre-push gate so CI
+  lint/vet failures surface locally before the push lands. Bypass with
+  `git push --no-verify` only when you know why the hook is unhappy.
 - Re-prove Gate G1 (`CGO_ENABLED=1 go test ./internal/gate/`) after any
   change to `internal/` that touches imports or the engine surface.
 

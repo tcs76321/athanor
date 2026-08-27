@@ -11,6 +11,12 @@ purpose; details live in `ARCHITECTURE.md`, `ROADMAP.md`, and `DEVELOPMENT.md`.
   `CGO_ENABLED=1` is set. See `DEVELOPMENT.md`.
 - Keep command output short. Pipe through `head`, `tail`, or `grep` when
   inspecting long output; the full result is rarely needed.
+- No multiline input via `heredoc` (`<<EOF`) or `printf` line-stacking.
+  Multiline shell input is fragile in the tool's terminal: long heredocs
+  produce garbled output and silently fail mid-stream. For multi-line file
+  content, write the file with the editor tool, not by piping to `cat`,
+  `tee`, or `printf`. If a single command genuinely needs more than one
+  line of input, break it into separate calls.
 
 ## Git and pagers
 

@@ -10,6 +10,24 @@ New entries are appended at the top. Do not rewrite history.
 
 ## Unreleased
 
+### M2 — Container Spine (continuing)
+
+- **M2-T3.** Per-job tokens (16-byte random hex, mounted at
+  `/run/athanor/token` via the existing bind-mount argv) plus
+  the `/internal/v1/` HTTP surface behind a bearer-token auth
+  middleware. Three routes in M2-T3 scope: GET job context, POST
+  heartbeat, POST log. `crypto/subtle.ConstantTimeCompare` guards
+  the bearer; per-job binding via `r.PathValue("id")` ensures a
+  token for job A is rejected on job B. Decisions: ADR-0008.
+  Structural proof: Gate G2 in `internal/gate/gate_g2_test.go`
+  (no `internal/llm` import, `ConstantTimeCompare` present in
+  middleware, every route wrapped in `authMiddleware`).
+  Behavior: 6 commits (`1fc6116` token dir, `90938a9` auth
+  middleware, `aa4e354` handlers, `18d684a` Gate G2, `ba54a49`
+  daemon boot wiring, ADR-0008). All 26 internalapi tests +
+  Gate G2 tests green; `make test-race` clean. No new
+  dependencies.
+
 ### Foundation layer (F1–F6)
 
 - **F6.** Initialize `CHANGELOG.md`. One line per M#-T# entry from now

@@ -304,3 +304,60 @@ the model's reasoning, not the answer.
   should also test kills during the synthesizing phase (where
   the artifact content is in flight) and during the atomic
   transition itself.
+
+## What M1-T8 Did NOT Test
+
+The M1-T8 probe is honest about its N=5 limitation, but the surface
+it did not exercise is what M3-T7's probe (the next quality probe)
+must cover. Declaring the scope up front keeps the next probe honest.
+
+### Not exercised by M1-T8
+
+- **Multi-candidate divergence.** M1 runs a single candidate through
+  the entire chain. M3 introduces N candidates per `cfg.Execution
+  .DivergenceCandidates` (default 3). The interaction between N
+  candidates, the persona assignment per candidate, and the LLM
+  call budget is unmeasured.
+- **Evaluating phase.** The M1 engine has no `phaseEvaluate` (per
+  ADR-0001, this is M3 work). There is no measurement of how a
+  model judges a candidate, scores it, or produces a `StrategyOutcome`.
+- **Reflecting phase.** Likewise absent in M1. The "LLM decides next
+  action" step is unmeasured: does the model pick `synthesize`,
+  `retry`, or `fail` for the right reasons?
+- **Real test execution in Job Pods.** The M1 chain never runs code.
+  M2-T4 introduces Job Pod execution; M3-T2 introduces candidate
+  evaluation inside Job Pods. The probe's failure modes for "candidate
+  fails tests inside a hardened container" are unknown.
+- **Multi-language code.** The M1-T8 code sample was Python-only
+  (per the probe sample list). M3 should test Go, Python, JavaScript,
+  and at least one language with a heavier test-running footprint
+  (Java, Rust).
+- **Large-context retrieval.** No MCE exists in M1, so there is no
+  measurement of how a model handles "given a 50K-token context,
+  answer question X." M5's probe is the place for this.
+- **Hallucination rate on adversarial inputs.** The M1 samples were
+  well-scoped goals with clear acceptance criteria. There is no
+  measurement of how the model handles ambiguous goals, contradictory
+  criteria, or attempts to redirect the agent via crafted inputs.
+- **Strategy mining statistical signal.** N=5 is far below the
+  `cfg.StrategyAnalysis.MinCohortSize` of 20. Strategy mining output
+  cannot be evaluated with this data.
+- **HITL queue latency.** M6 introduces the HITL queue. M1 has no
+  approval surface, so the round-trip "submit a job that requires
+  approval → human sees it → human decides" has no measurement.
+- **Daydreaming.** M1 has no Daydreaming. There is no measurement of
+  the §17.2 constraints (yield to user activity, draft-only output,
+  no git commits, no accepted-artifact modification).
+- **OS watcher behavior.** M1 has a `NoopWatcher` in `internal/power`.
+  M6 replaces it with a real watcher; M1-T8 cannot measure the
+  interactive/autonomous profile flip.
+
+### What M3-T7 must cover
+
+The M3 quality probe (ROADMAP M3-T7) should run at least 15 samples
+across 3 archetypes (text, code, document) and 2-3 task types per
+archetype, with structured failure analysis on every sample that does
+not meet its acceptance criteria. It should produce per-phase wall
+time, criteria adherence, qualitative usefulness on a 1-5 scale, and
+a per-failure-mode breakdown. The probe should target the gaps above
+explicitly, not just re-run M1-T8 with more samples.

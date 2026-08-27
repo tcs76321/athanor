@@ -1,0 +1,58 @@
+# M1-T8 quality probe configuration.
+#
+# Single-model probe: ALL 5 personas map to gemma4:12b-mlx. This is
+# deliberate: the M2 Max 32 GB host cannot hold two large models
+# simultaneously (qwen3.8:27b-mlx is 22 GB GPU; gemma4:12b-mlx is 14 GB;
+# sum 36 GB > 32 GB). Running both thrashes the unified-memory pool,
+# slows both models via swap, and produces misleading wall times.
+#
+# Mapping every role to one model makes the probe fair to the protocol
+# (one machine, one model, three LLM calls per job) and avoids any
+# memory-thrash confound. Phase wall-time budgets are bumped to 600s
+# because the first run revealed the 120s default is too tight for
+# gemma4's thinking-mode generation on longer prompts.
+#
+# The "alternative" persona (ornith-1.5:9b) is wired but M1 does not
+# currently invoke it for any phase; mapping it to gemma4 keeps the
+# registry's "all roles assigned" invariant honest without pulling a
+# second model into memory.
+
+version: 2
+
+inference:
+  default_backend: ollama
+  ollama_url: "http://localhost:11434"
+  cloud_enabled: false
+  cloud_requires_approval: true
+
+personas:
+  wide:
+    model: "gemma4:12b-mlx"
+    context_target: 32768
+    temperature: 0.7
+  tall:
+    model: "gemma4:12b-mlx"
+    context_target: 16384
+    temperature: 0.4
+  main:
+    model: "gemma4:12b-mlx"
+    context_target: 32768
+    temperature: 0.7
+  security:
+    model: "gemma4:12b-mlx"
+    context_target: 8192
+    temperature: 0.0
+  alternative:
+    model: "gemma4:12b-mlx"
+    context_target: 16384
+    temperature: 0.5
+
+execution:
+  phase_wall_time_budgets:
+    planning: "600s"
+    diverging: "600s"
+    synthesizing: "600s"
+    comparing: "60s"
+    evaluating: "60s"
+    default: "600s"
+

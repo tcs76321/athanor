@@ -12,6 +12,7 @@
 
 # Athanor runtime state (never committed)
 /state/
+/state-*/
 /backups/
 /workspace/
 *.db
@@ -20,6 +21,10 @@
 
 # Local daemon configuration (copy config.example.yaml to start)
 /config.yaml
+
+# Probe-specific configs are tracked (config-probe.yaml documents the
+# M1-T8 persona mapping); future /config-*.yaml files for other probes
+# can be added or ignored explicitly.
 
 # Keep spike source code and docs
 !/spikes/**/*.go

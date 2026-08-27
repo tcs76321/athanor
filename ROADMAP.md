@@ -11,7 +11,7 @@
 | TASK-000 SQLite + sqlite-vec spike | ✅ Done (findings: [docs/sqlite-setup.md](docs/sqlite-setup.md)) |
 | Power manager draft (`internal/power`) | ✅ Aligned with ARCHITECTURE §24 naming (jobs, not VMs) and fully unit-tested |
 | M0 Foundations | ✅ Done — T1–T8 complete (module, config, logging, store, migrations, EventLog API, `/healthz`, CI) + enum-normalization migration 0003 ([ADR-0005](docs/adr/0005-canonical-enum-values.md)). Gate G0 passed: kill -9 crash/restart verified, migrations forward-only and idempotent |
-| M1 Walking Skeleton | 🚧 Code-complete (T1–T7); Gate G1 evidence: [docs/demo-m1.md](docs/demo-m1.md), E2E + AST containment tests in CI. **T8 (quality probe) pending a live Ollama** — protocol ready: [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md) |
+| M1 Walking Skeleton | ✅ Done (T1–T8) — T1–T7 code-complete, Gate G1 evidence: [docs/demo-m1.md](docs/demo-m1.md), E2E + AST containment tests in CI. T8 quality probe ran on 2026-08-26 with `gemma4:12b-mlx` (5/5 samples met acceptance criteria, adherence 5/5); findings: [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md). Key carryover to M3: synthesis phase produces meta-commentary ("Change Summary" / "Known Limitations") that should be suppressed in M3-T7 prompt work |
 | M2 Container Spine | ⬜ Not started |
 | M3 Dialectical Loop v1 | ⬜ Not started |
 | M4 Airlock & Gateway | ⬜ Not started |
@@ -142,7 +142,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | M1-T5 | Artifact store: create draft artifacts, version them, list per project | M | code | Draft artifacts persisted with type/version/status; visible via CLI listing | §9 |
 | M1-T6 | Kill switch (CLI flag + endpoint) freezing all new work | S | code | Frozen state survives restart; unfreeze requires explicit command (logged) | §22 |
 | M1-T7 | Minimal CLI: create project, submit goal, stream job progress | M | code | Fresh clone → running daemon → submitted goal → draft artifact on disk, in under 5 minutes of user time | — |
-| M1-T8 | Quality probe (spike): run 5 sample goals across text/code/document archetypes; record qualitative findings | S | spike | Findings note in `docs/` with hypothesis → observation → implication format; informs M3 prompts | §13 |
+| M1-T8 | Quality probe (spike): run 5 sample goals across text/code/document archetypes; record qualitative findings | S | spike | Findings note in `docs/` with hypothesis → observation → implication format; informs M3 prompts. **✅ Ran 2026-08-26 — see [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md) for findings; 5/5 adherence with `gemma4:12b-mlx`** | §13 |
 
 **Gate G1:** Demo script passes end-to-end; crash-recovery test green; grep-level proof that no tool execution path exists.
 
@@ -173,7 +173,7 @@ Sequential by default; parallelize only where the graph allows. Sizes: **S** ≤
 | M3-T4 | Budgets & retries: per-phase wall-time budgets, max candidates, recovery counters, budget-exhaustion escalation | M | code | Exceeded budgets pause/escalate per policy; counters survive restart | §29 |
 | M3-T5 | Git tool: local branch + atomic commit on artifact acceptance (push permanently denied until M6 HITL) | M | code | Commits land on agent-created branches; working tree clean after commit; push attempt blocked and alarmed | §14, §22 |
 | M3-T6 | Crash-recovery E2E: kill Core mid-diverging / mid-evaluating / mid-testing → resume correctly; partial artifacts quarantined or draft | M | test | E2E test automates kill-and-resume at each phase; no state loss | §23.6 |
-| M3-T7 | Quality probe #2: dialectical loop vs single-shot on ~10 tasks; document whether multi-candidate + comparison actually wins on local models | S | spike | Honest findings note in `docs/`; if the loop underperforms, an ADR proposes prompt/rubric changes before M6 builds on it | §13 |
+| M3-T7 | Quality probe #2: dialectical loop vs single-shot on ~10 tasks; document whether multi-candidate + comparison actually wins on local models | S | spike | Honest findings note in `docs/`; if the loop underperforms, an ADR proposes prompt/rubric changes before M6 builds on it. **Builds on M1-T8 ([docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md)); single-model-per-run design; 27 B `tall` persona + 9 B `ornith-1.5` for `alternative`; reuse probe helper at `spikes/m1-quality-probe/`** | §13 |
 
 **Gate G3:** E2E demo — code-project goal → single task → 3 candidates → tests in pod → comparison → accepted commit, no user intervention; recovery test green.
 

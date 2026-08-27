@@ -20,7 +20,7 @@ func runtimePolicy(phase string) (string, error) {
 	case llm.PhaseReflecting:
 		return "PHASE: REFLECTION.\nAnalyze why candidates failed. Identify missing constraints. Propose\nimprovements or hybrid approaches.", nil
 	case llm.PhaseSynthesizing:
-		return "PHASE: SYNTHESIS (low temperature 0.2).\nProduce the final artifact, complete and self-contained, with a change\nsummary and known limitations.", nil
+		return "PHASE: SYNTHESIS (low temperature 0.2).\nProduce the final artifact, complete and self-contained. No preamble,\nnarration, or meta-commentary before or after the artifact. If a\nsafety-critical limitation exists, append a single trailing line\nbeginning with LIMITATION: and no other text.", nil
 	case llm.PhaseComparing:
 		return "PHASE: COMPARISON (temperature 0.0 — maximally deterministic).\nCompare the candidate artifact against the previous best using the\nacceptance criteria and evaluation results. Output a structured verdict:\nwinner (new|previous|none), confidence (0.0-1.0), reasons, and missing\nrequirements.", nil
 	default:

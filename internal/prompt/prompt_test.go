@@ -227,3 +227,31 @@ func sectionText(res Result, name string) string {
 	}
 	return ""
 }
+
+// TestAssemble_SynthesisPhase_HasNoPreambleInstruction pins the M1-T8.1
+// soft-suppression wording: the synthesis phase policy must instruct
+// the model to produce only the artifact (with an optional single
+// trailing LIMITATION: line), and must not contain the old
+// "change summary and known limitations" preamble that the quality
+// probe found on every artifact.
+func TestAssemble_SynthesisPhase_HasNoPreambleInstruction(t *testing.T) {
+	in := sampleInput()
+	in.Phase = llm.PhaseSynthesizing
+	res, err := Assemble(in)
+	if err != nil {
+		t.Fatalf("Assemble(synthesizing) err = %v", err)
+	}
+	policy := sectionText(res, SectionRuntimePolicy)
+	if policy == "" {
+		t.Fatal("synthesizing policy is empty")
+	}
+	if strings.Contains(policy, "change summary") || strings.Contains(policy, "known limitations") {
+		t.Errorf("synthesis policy still requests preamble; got %q", policy)
+	}
+	if !strings.Contains(policy, "No preamble") {
+		t.Errorf("synthesis policy missing no-preamble instruction; got %q", policy)
+	}
+	if !strings.Contains(policy, "LIMITATION:") {
+		t.Errorf("synthesis policy missing single-line LIMITATION: allowance; got %q", policy)
+	}
+}

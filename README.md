@@ -125,7 +125,25 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ## Status
 
-Pre-MVP. **M0 Foundations is complete** (Gate G0 passed): Go module layout, config loader with validation, structured category-tagged logging, store layer with forward-only embedded migrations (incl. enum-normalization migration 0003, [ADR-0005](docs/adr/0005-canonical-enum-values.md)), the append-only EventLog API, a runnable daemon serving `/healthz` on loopback, and CI (vet + test-race + lint). Crash recovery verified: kill -9 mid-run leaves a usable database and restarts cleanly. The daemon boots on built-in defaults when no `config.yaml` exists (see `config.example.yaml`). **M1 — Walking Skeleton is code-complete** (T1–T7): a goal goes in, an LLM-generated draft artifact comes out, the run survives kill -9 mid-job, the kill switch freezes all new work, and an executable gate test proves no tool-execution capability exists (Gate G1 evidence: [docs/demo-m1.md](docs/demo-m1.md)). M1-T8 (quality probe against a live Ollama) ran 2026-08-26 with `gemma4:12b-mlx`; 5/5 acceptance-criteria adherence across text/code/document archetypes. Findings and per-model timings at [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md). The M1-T8 follow-ups — synthesis-prompt preamble suppression, default-budget raise, synthesizing-phase recovery test — are integrated. Next: **M2 — Container Spine**.
+### What works today (M0 + M1 + M2-T1 + M2-T2)
+
+- **Daemon on loopback** (`http://127.0.0.1:7420`). Config falls back to built-in defaults when `config.yaml` is absent; missing config is not an error on a fresh clone. `/healthz` reports status, version, uptime.
+- **CLI client.** `project create`, `goal submit`, `job watch`, `artifacts`, `freeze`, `unfreeze`. Talks to a running daemon over loopback.
+- **Walking-skeleton pipeline.** Submit a goal → queued → context_building → planning → diverging → synthesizing → comparing → completed. Draft artifacts persist under `state/artifacts/` with SHA-256 content hashes; the supersede chain is linear.
+- **Append-only audit log.** Every state transition writes a `jobs` event in the same transaction as the state update. `GET /jobs/{id}/events` returns the full chain.
+- **Kill switch.** `POST /freeze` freezes; `DELETE /freeze` unfreezes with a required reason. Frozen state persists in `system_state` and survives restarts.
+- **Crash recovery.** `kill -9` mid-job leaves a usable database; restart resumes from the last committed phase.
+- **Container spine scaffold.** `internal/jobpod` owns the Podman Job Pod lifecycle (Start/Stop/Get/Sweep), platform-split hardening flags (Linux seccomp, Darwin no-op), per-job token bind mount. Wired into daemon boot for a startup sweep of orphan pods.
+- **Containment guarantee (Gate G1).** An AST-walking test in `internal/gate/gate_test.go` fails the build if any production source imports a tool-execution capability. The M1 agent is provably LLM + storage only. See [docs/demo-m1.md](docs/demo-m1.md).
+- **M1 quality probe** ran 2026-08-26 with `gemma4:12b-mlx`; 5/5 acceptance-criteria adherence across text/code/document archetypes. Findings: [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md).
+
+### What's next (M2 finish)
+
+M2-T3 (per-job tokens + internal API), M2-T4 (wire Job Pods into the engine phase chain), M2-T5 (kill-9 integration test for zero-surviving-pods), M2-T6 (security suite on Linux and macOS). After M2-T6, the agent has actual tool execution in hardened, network-isolated, rootless containers with a verifiable security posture on both OSes.
+
+### What's deferred
+
+M3 Dialectical Loop v1 (multi-candidate divergence, evaluation, reflection, synthesis, comparison), M4 Airlock & Gateway (ClamAV/YARA, default-deny network, Reader Mode, prompt-injection scan), M5 Multidimensional Context Engine (spike first, then lossless division + sqlite-vec + Temp 0.0 compaction), M6 Autonomy & Feedback (HITL queue, CorrectionRecord loop, Strategy mining, real OS watcher), M7 Endurance & Release (24h soak, fresh-install demo, first installable release). See [ROADMAP.md](ROADMAP.md) for the full plan and exit gates.
 
 ## Documentation
 

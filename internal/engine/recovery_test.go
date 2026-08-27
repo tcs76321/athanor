@@ -111,3 +111,105 @@ func TestRecoverResumesMidFlightJob(t *testing.T) {
 	}
 	t.Fatal("job never completed after recovery")
 }
+
+// TestRecoverResumesJob_ArtifactWrittenBeforeTransition (M1-T8.3) covers
+// the narrow atomicity window in phaseSynthesize: the final-kind
+// artifact row and content file exist on disk, but the state
+// transition to StateComparing has not yet been committed. Recovery
+// must resume the job in StateSynthesizing, version the existing
+// artifact (not create a duplicate), and complete.
+func TestRecoverResumesJob_ArtifactWrittenBeforeTransition(t *testing.T) {
+	env := newEnv(t)
+	jobID := env.submit(t)
+
+	// Drive to synthesizing via the normal phase chain (this also
+	// writes the proposal artifact at the end of diverging).
+	for {
+		cur, err := env.jobs.Get(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cur.State == job.StateSynthesizing {
+			break
+		}
+		if cur.State.Terminal() {
+			t.Fatalf("job reached %s before crash point", cur.State)
+		}
+		if err := stepOnce(env.eng, jobID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Simulate the atomicity window: write the final-kind artifact
+	// (mimicking what phaseSynthesize does before Transition), but
+	// leave the job in StateSynthesizing.
+	cur, err := env.jobs.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.artifacts.CreateDraftFor(context.Background(),
+		cur.ProjectID, "", jobID, artifact.KindDocument,
+		[]byte("half-written final draft (pre-crash)"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Crash + recover.
+	if err := env.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, err := store.Open(env.db.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db2.Close() })
+	jobs2 := job.NewRepository(db2)
+	artifacts2 := artifact.NewStore(db2, filepath.Join(filepath.Dir(env.db.Path()), "artifacts"))
+	freezer2, _ := control.NewKillSwitch(db2)
+	registry, _ := llm.NewRegistry(env.cfg.Personas)
+	eng2 := New(env.cfg, db2, jobs2, project.NewRepo(db2), artifacts2,
+		llm.NewClient(env.cfg.Inference.OllamaURL, nil), registry, freezer2)
+	eng2.Recover(context.Background())
+
+	// Wait for completion. Recovery must version the existing final
+	// artifact (v1 superseded + v2 draft = 2 rows) rather than
+	// create a fresh v1 alongside the pre-crash one (3 rows, with
+	// two v1 drafts). ListByJob does not exist in M1; filter
+	// through ListByProject.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		final, err := jobs2.Get(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if final.State == job.StateCompleted {
+			docs, err := artifacts2.ListByProject(context.Background(), cur.ProjectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			versions := map[int]bool{}
+			for _, d := range docs {
+				if d.JobID == jobID && d.Kind == artifact.KindDocument {
+					count++
+					versions[d.Version] = true
+				}
+			}
+			if count != 2 {
+				t.Errorf("final-kind artifacts for job = %d, want 2 (v1 superseded + v2 draft)", count)
+			}
+			if versions[1] && versions[2] {
+				// correct: recovery versioned, not duplicated
+			} else if versions[1] && !versions[2] {
+				t.Errorf("final-kind artifacts are only v1; recovery failed to create v2 after pre-existing v1")
+			} else if !versions[1] && versions[2] {
+				t.Errorf("final-kind artifacts skip v1; recovery created v2 without superseding the pre-crash v1")
+			} else {
+				t.Errorf("final-kind artifacts have unexpected versions: %v", versions)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job never completed after pre-transition recovery")
+}

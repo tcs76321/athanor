@@ -18,6 +18,16 @@ Don't run bare `go build` / `go test` — they silently drop CGO and fail on the
 
 When FTS5 support is needed, add the build tag: `go build -tags sqlite_fts5 .`
 
+## Per-phase budgets
+
+Default `execution.phase_wall_time_budgets` are sized for 7–12 B models at
+~0.7 temperature. A 27 B thinking-mode model on first call (cold load)
+can take 2–3 min for `planning`, which will exceed the 300 s default.
+If you see `context deadline exceeded` in `planning`, raise the budget in
+your `config.yaml` (e.g. `planning: "600s"`) or use
+[`config-probe.yaml`](config-probe.yaml), which already does this for a
+single-model setup. Findings: [`docs/probes/m1-quality-probe.md`](docs/probes/m1-quality-probe.md).
+
 ## Running the daemon
 
 ```bash

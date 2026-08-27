@@ -82,7 +82,7 @@ execution:
   # Wall-time budgets per Dialectical phase (§13); "default" covers phases
   # without a specific entry.
   phase_wall_time_budgets:
-    planning: "120s"
+    planning: "300s"
     evaluating: "600s"        # must accommodate Job Pod boot + test suite
     default: "300s"
 

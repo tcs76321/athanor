@@ -94,7 +94,7 @@ func applyDefaults(c *Config) {
 		c.Execution.PhaseWallTimeBudgets = map[string]Duration{}
 	}
 	for phase, d := range map[string]Duration{
-		"planning":   Duration(120 * second),
+		"planning":   Duration(300 * second),
 		"evaluating": Duration(600 * second),
 		"default":    Duration(300 * second),
 	} {

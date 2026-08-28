@@ -8,7 +8,7 @@
 CGO_ENABLED = 1
 export CGO_ENABLED
 
-.PHONY: build test test-race vet lint check tidy run clean hooks bench
+.PHONY: build test test-race test-integration vet lint check tidy run clean hooks bench
 
 build:
 	go build -o bin/athanor ./cmd/athanor
@@ -21,6 +21,13 @@ test:
 
 test-race:
 	go test -race ./...
+
+# Integration tests are opt-in (gated by ATHANOR_RUN_INTEGRATION=1 inside
+# the test files). They shell out to a real `podman` binary, so they are
+# NOT run by `make check` and never block CI. Developers run them locally
+# to exercise the kill-9 orphan-reap path that unit tests can't simulate.
+test-integration:
+	ATHANOR_RUN_INTEGRATION=1 go test -race -count=1 ./internal/jobpod/...
 
 vet:
 	go vet ./...

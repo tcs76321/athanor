@@ -185,6 +185,10 @@ func run(configPath, addr, stateDir string) error {
 	}
 
 	// §23.6: resume any job that was mid-flight when the daemon died.
+	// M2-T5 known limitation: a synthesizing job whose pod was running
+	// when the daemon died will fail to resume here, because the new
+	// daemon's jobpod.Manager is empty and TokenFor returns ErrNotFound.
+	// M3 wires the engine to call podMgr.Start for recovered jobs.
 	eng.Recover(context.Background())
 
 	fmt.Printf("athanor %s listening on http://%s\n", version, loopAddr)

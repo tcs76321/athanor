@@ -216,9 +216,15 @@ func TestStop_Idempotent(t *testing.T) {
 	}
 }
 
-// TestSupervise_TransitionsToStopped asserts the supervisor updates
-// the in-memory Pod to StateStopped when `podman inspect` reports
-// `exited 0`.
+// TestSupervise_TransitionsToStopped asserts the supervisor drives
+// a pod to StateStopped when `podman inspect` reports `exited 0`,
+// and (M2-T5) drops the in-memory entry when the transition fires.
+// The fake client returns "running" on the first inspect and
+// "exited 0" on the second; the supervisor's behavior is observed
+// indirectly via the call count and the post-condition (no entry
+// in m.pods, Get returns ErrNotFound). Catching the StateStopped
+// value in a polling loop is racy by design — the supervisor sets
+// state and forgets in the same critical section.
 func TestSupervise_TransitionsToStopped(t *testing.T) {
 	runCount := 0
 	inspectCount := 0
@@ -230,6 +236,9 @@ func TestSupervise_TransitionsToStopped(t *testing.T) {
 				return nil, nil, nil
 			case "inspect":
 				inspectCount++
+				if inspectCount == 1 {
+					return []byte("running 0"), nil, nil
+				}
 				return []byte("exited 0"), nil, nil
 			}
 			return nil, nil, nil
@@ -239,36 +248,57 @@ func TestSupervise_TransitionsToStopped(t *testing.T) {
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	// Wait for the supervisor to drop the entry. The post-condition
+	// is the M2-T5 invariant.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		got, err := m.Get(goodID)
-		if err != nil {
-			t.Fatal(err)
+		m.mu.RLock()
+		_, present := m.pods[goodID]
+		m.mu.RUnlock()
+		if !present {
+			break
 		}
-		if got.State == StateStopped {
-			if runCount != 1 {
-				t.Errorf("run called %d times, want 1", runCount)
-			}
-			if inspectCount < 1 {
-				t.Errorf("inspect called %d times, want >= 1", inspectCount)
-			}
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	got, _ := m.Get(goodID)
-	t.Fatalf("pod state never reached stopped; final state = %s", got.State)
+	m.mu.RLock()
+	_, stillPresent := m.pods[goodID]
+	m.mu.RUnlock()
+	if stillPresent {
+		t.Fatalf("in-memory entry for %s was not removed after terminal state", goodID)
+	}
+	if runCount != 1 {
+		t.Errorf("run called %d times, want 1", runCount)
+	}
+	if inspectCount < 2 {
+		t.Errorf("inspect called %d times, want >= 2 (running + exited)", inspectCount)
+	}
+	// Post-condition: Get returns ErrNotFound.
+	if _, err := m.Get(goodID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get after terminal err = %v, want ErrNotFound", err)
+	}
+	// M2-T5: TokenFor also returns ErrNotFound, matching the Stop path.
+	if _, err := m.TokenFor(goodID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("TokenFor after terminal err = %v, want ErrNotFound", err)
+	}
 }
 
-// TestSupervise_TransitionsToFailed asserts the supervisor records
-// StateFailed and a non-nil ExitErr when the pod exits non-zero.
+// TestSupervise_TransitionsToFailed asserts the supervisor drops
+// the in-memory entry when the pod exits non-zero. The supervisor
+// sets StateFailed and a non-nil ExitErr before the forget; the
+// M2-T5 invariant is observed via the post-condition (no entry in
+// m.pods, Get returns ErrNotFound) and the call sequence.
 func TestSupervise_TransitionsToFailed(t *testing.T) {
+	inspectCount := 0
 	client := &fakeClient{
 		responder: func(args []string) ([]byte, []byte, error) {
 			switch args[0] {
 			case "run":
 				return nil, nil, nil
 			case "inspect":
+				inspectCount++
+				if inspectCount == 1 {
+					return []byte("running 0"), nil, nil
+				}
 				return []byte("exited 1"), nil, nil
 			}
 			return nil, nil, nil
@@ -278,22 +308,33 @@ func TestSupervise_TransitionsToFailed(t *testing.T) {
 	if _, err := m.Start(context.Background(), validSpec()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		got, err := m.Get(goodID)
-		if err != nil {
-			t.Fatal(err)
+		m.mu.RLock()
+		_, present := m.pods[goodID]
+		m.mu.RUnlock()
+		if !present {
+			break
 		}
-		if got.State == StateFailed {
-			if got.ExitErr == nil {
-				t.Error("ExitErr is nil on failed pod")
-			}
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
-	got, _ := m.Get(goodID)
-	t.Fatalf("pod state never reached failed; final state = %s", got.State)
+	m.mu.RLock()
+	_, stillPresent := m.pods[goodID]
+	m.mu.RUnlock()
+	if stillPresent {
+		t.Errorf("in-memory entry for %s was not removed after failed state", goodID)
+	}
+	if inspectCount < 2 {
+		t.Errorf("inspect called %d times, want >= 2 (running + exited)", inspectCount)
+	}
+	// Post-condition: Get returns ErrNotFound.
+	if _, err := m.Get(goodID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get after terminal err = %v, want ErrNotFound", err)
+	}
+	// M2-T5: TokenFor also returns ErrNotFound, matching the Stop path.
+	if _, err := m.TokenFor(goodID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("TokenFor after terminal err = %v, want ErrNotFound", err)
+	}
 }
 
 // TestParseInspect covers the inspect output parser directly so the

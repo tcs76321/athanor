@@ -200,6 +200,15 @@ func (m *manager) supervise(ctx context.Context, id string, entry *podEntry) {
 			} else {
 				m.setState(id, StateFailed, fmt.Errorf("podman exit code %d", exitCode))
 			}
+			// M2-T5: drop the entry from the in-memory map on
+			// terminal state. The entry is no longer live; the
+			// token-dir removal above covers secret cleanup. Get
+			// and TokenFor both return ErrNotFound from here on,
+			// which matches the Stop path and is what the engine
+			// and HTTP surface already handle (TokenFor's
+			// "no active pod" error is the documented behavior
+			// for a job whose pod has terminated).
+			m.forget(id)
 			return
 		default:
 			// Unknown status (paused, dead, etc.). Log and keep
@@ -219,6 +228,18 @@ func (m *manager) setState(id string, state State, exitErr error) {
 	}
 	entry.pod.State = state
 	entry.pod.ExitErr = exitErr
+}
+
+// forget removes the entry from the in-memory map. Called by the
+// supervisor when it observes a terminal state (exited/stopped).
+// Idempotent: removing an unknown id is a no-op. The token dir is
+// removed by the supervisor's deferred block, not here, so the
+// cleanup ordering is the same regardless of which path tore the
+// pod down.
+func (m *manager) forget(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.pods, id)
 }
 
 // Stop force-removes a pod. Idempotent: stopping a stopped pod is

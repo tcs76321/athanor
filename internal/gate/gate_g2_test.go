@@ -223,3 +223,97 @@ func findFileContaining(dir, needle string) (string, string, bool) {
 	return "", "", false
 }
 
+// jobpodArgsDir is the directory whose source files produce the
+// `podman run` argv for a Job Pod. Any flag, mount, or escape
+// vector that ends up in a running pod must originate in one of
+// the .go files here. Gate G2 greps this directory structurally
+// because the buildArgs function is build-tag-split
+// (linux || darwin) and a CI host may not match the operator's
+// platform. The text-search form of the test is platform-agnostic.
+const jobpodArgsDir = "../../internal/jobpod"
+
+// TestGateG2JobPodArgvCannotEscape is the M2-T6 structural backstop
+// for the §21 containment boundary. Every flag, mount, and source
+// that ends up in a `podman run` argv for a Job Pod must be added
+// by one of three files: args_common.go, args_linux.go,
+// args_darwin.go. This test greps those three files for the
+// known-bad substrings that would re-enable a pod escape and
+// fails the build if any of them appear.
+//
+// The complement is TestBuildArgs_PackageFlagsCannotBypassHardening
+// in internal/jobpod/args_common_test.go, which asserts the
+// *runtime* argv (the result of buildArgs) does not contain the
+// most common bypasses. That test is build-tagged
+// (linux || darwin) and is the runtime defense. This test is
+// the source-tree defense: it runs on every push, on every
+// platform, with no build tags, and catches a forbidden flag
+// before it ever reaches a running pod.
+//
+// Forbidden substrings (intentionally overlapping with the runtime
+// test, but with a wider net — slirp4netns, AppArmor, bind-mount
+// sources into host-private directories):
+//
+//	--net=slirp4netns        // podman network mode that bridges
+//	                          //   to the host's network stack
+//	--network=slirp4netns    // long form of the same bypass
+//	podman.sock              // any string that would mount the
+//	                          //   podman socket into the pod
+//	/home/                   // bind-mount source for user homes
+//	/root/                   // bind-mount source for root home
+//	/Users/                  // macOS user home prefix
+//	/etc/passwd              // bind-mount source for shadow file
+//	.state/                  // bind-mount source for the SQLite
+//	                          //   state directory
+//	apparmor=unconfined      // disables AppArmor on Linux hosts
+//
+// The list is intentionally a denylist of *substrings* that would
+// have to appear in the argv source code to be effective. A
+// comment in the source mentioning "forbidden --net=slirp4netns"
+// would also fail the test, which is the desired property: the
+// forbidden flag must never even be discussed in the argv source.
+func TestGateG2JobPodArgvCannotEscape(t *testing.T) {
+	entries, err := os.ReadDir(jobpodArgsDir)
+	if err != nil {
+		t.Fatalf("read %s: %v", jobpodArgsDir, err)
+	}
+	forbidden := []string{
+		"--net=slirp4netns",
+		"--network=slirp4netns",
+		"podman.sock",
+		"/home/",
+		"/root/",
+		"/Users/",
+		"/etc/passwd",
+		"state/", // matches state/ as a bind-mount source; the
+		// token-dir lives at <state>/tokens, which is created
+		// by the manager at runtime, not in the argv source.
+		"apparmor=unconfined",
+	}
+	for _, e := range entries {
+		name := e.Name()
+		// We only care about the three argv-construction source
+		// files. The test files (args_*_test.go) are deliberately
+		// excluded because the runtime test there is the
+		// behavioral companion, not the structural backstop.
+		if !strings.HasPrefix(name, "args_") || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(jobpodArgsDir, name)
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			t.Fatalf("read %s: %v", path, rerr)
+		}
+		body := string(raw)
+		for _, bad := range forbidden {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s contains forbidden substring %q; "+
+					"the M2-T6 argv construction must not enable "+
+					"pod escape (Gate G2)", path, bad)
+			}
+		}
+	}
+}
+

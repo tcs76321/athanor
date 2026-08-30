@@ -137,11 +137,12 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 - **Internal API behind bearer tokens.** Job Pods authenticate to the daemon at `/internal/v1/` (job context, heartbeat, log, `execute_code`, `run_tests`) with a 16-byte random hex token bound to their job ID. Gate G2 (`internal/gate/gate_g2_test.go`) structurally proves every route is wrapped in `authMiddleware` and every tool handler consults the per-job envelope.
 - **Tool envelope (M2-T4).** The engine's `code`-archetype sub-steps (`runCodeInPod`, `runTestsInPod`) run the LLM's proposal in a Job Pod and persist the exit code, stdout, stderr, and duration as a code artifact. Disallowed tools are rejected with 403 and audited; the engine treats a `tool_disallowed` as a soft-fail (the M1 walking skeleton completes the job) and M3 will turn soft-fails into HITL escalations.
 - **Containment guarantee (Gate G1).** An AST-walking test in `internal/gate/gate_test.go` fails the build if any production source imports a tool-execution capability. The M1 agent is provably LLM + storage only. See [docs/demo-m1.md](docs/demo-m1.md).
+- **Container security suite (Gate G2, M2-T6).** A structural argv regression test in CI (`TestGateG2JobPodArgvCannotEscape`) blocks `--net=slirp4netns`, `podman.sock`, and host-FS bind-mount sources from ever entering the `podman run` argv. Five behavioral probes in `internal/jobpod/security_test.go` (gated by `ATHANOR_RUN_INTEGRATION`) bring up real hardened pods and assert the network, Ollama, podman socket, host FS, and credentials are all denied at runtime. Reference run 2026-08-30: all five probes pass. See [docs/demo-m2.md](docs/demo-m2.md).
 - **M1 quality probe** ran 2026-08-26 with `gemma4:12b-mlx`; 5/5 acceptance-criteria adherence across text/code/document archetypes. Findings: [docs/probes/m1-quality-probe.md](docs/probes/m1-quality-probe.md).
 
-### What's next (M2 finish)
+### What's next
 
-M2-T5 (kill-9 integration test for zero-surviving-pods), M2-T6 (security suite on Linux and macOS). After M2-T6, the agent has actual tool execution in hardened, network-isolated, rootless containers with a verifiable security posture on both OSes.
+M2 is complete; M3 Dialectical Loop v1 (multi-candidate divergence, evaluation, reflection, synthesis, comparison) is unblocked. The engine gains N-candidate generation in `diverging`, deterministic evaluation in `evaluating` (always on the `security` persona at Temp 0.0 per §4 Invariant 2), and a comparison phase that picks the winner from the EvaluationRecords. M3 is the first milestone where the M2-T6 containment guarantee gets exercised at scale.
 
 ### What's deferred
 

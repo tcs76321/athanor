@@ -12,6 +12,41 @@ New entries are appended at the top. Do not rewrite history.
 
 ### M2 — Container Spine (continuing)
 
+- **M2-T6.** Security test suite closes Gate G2. Two layers: a
+  structural argv regression test
+  (`TestGateG2JobPodArgvCannotEscape` in
+  `internal/gate/gate_g2_test.go`) that runs in CI and
+  grep-blocks `--net=slirp4netns`, `podman.sock`, and host-FS
+  bind-mount sources from the argv source files; and five
+  behavioral probes in `internal/jobpod/security_test.go`
+  gated by `ATHANOR_RUN_INTEGRATION` that bring up real
+  hardened pods and assert `wget` to the internet fails, both
+  Ollama host aliases fail, the podman socket is absent,
+  writes to the rootfs are read-only-denied with the pod's
+  `/` showing an `overlay` mount, and the pod's env is
+  free of secret patterns. Every probe appends a row to
+  the `events` table (category `podman`) with the script,
+  exit code, result, and elapsed ms — the audit trail
+  satisfies the "failures logged as security events"
+  acceptance. Decisions: ADR-0010. Plan: `docs/m2-t6-plan.md`.
+  Evidence: `docs/demo-m2.md`. Reference run 2026-08-30 on
+  macOS 14 / podman 5.8.2 / applehv: all five probes pass
+  in ~7s combined; CI structural test green;
+  `make test-race` clean. No new dependencies. Gate G2
+  is fully green and M2 is complete; M3 (Dialectical Loop
+  v1) is unblocked.
+- **M2-T5.** Terminal-state cleanup + token-dir revocation
+  on supervisor exit. `internal/jobpod/manager.go` removes
+  the in-memory pod entry when the supervisor observes a
+  terminal `podman inspect` result (`exited` / `stopped`).
+  The token dir is unmounted in the same supervisor tick,
+  so the per-job bearer secret never outlives the pod. The
+  `make test-integration` target is added so the orphan-reap
+  test (M2-T2's startup sweep) is opt-in per the existing
+  convention. Three commits: `379a6c9` (sweep wiring),
+  `5d13221` (test-integration target), `83f90e7` (terminal-
+  state drop).
+
 - **M2-T4.** Internal API `execute_code` and `run_tests` routes
   with a per-job tool envelope (ARCHITECTURE §25). Closed set of
   two tools lands in `internal/toolenvelope`; per-task override

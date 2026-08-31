@@ -89,8 +89,8 @@ func TestFreezePausesAndUnfreezeResumes(t *testing.T) {
 	if held.State != job.StateQueued {
 		t.Fatalf("frozen queued run state = %s, want queued (no work starts)", held.State)
 	}
-	if e.ollama.calls != 3 {
-		t.Errorf("llm calls = %d, want 3 (frozen job made no calls)", e.ollama.calls)
+	if e.ollama.calls != 9 {
+		t.Errorf("llm calls = %d, want 9 (M3-T1: first job makes 9 calls; frozen job makes 0)", e.ollama.calls)
 	}
 
 	// Unfreeze + Recover: the held job runs to completion.

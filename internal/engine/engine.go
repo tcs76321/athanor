@@ -1,21 +1,36 @@
-// Package engine drives jobs through the M1 walking-skeleton phase chain
-// (ROADMAP M1): queued → context_building → planning → diverging (single
-// candidate) → synthesizing → comparing → completed.
+// Package engine drives jobs through the full §8.2 state machine:
+// queued → context_building → planning → diverging (N candidates,
+// §13.1) → evaluating (security persona, temp 0.0, EvaluationRecord
+// persistence) → reflecting (only on no-pass, budgeted retry loop)
+// → synthesizing (consumes passing candidates) → comparing
+// (§19.3 deterministic rule) → completed/failed.
 //
-// M1 simplifications, all deliberate (ADR-0001 and ROADMAP M1 scope):
-//   - No tool execution exists at all (Gate G1). The agent can only
-//     think (one LLM call per phase) and persist.
-//   - `evaluating`/`reflecting` phases arrive with Job Pods in M3.
-//   - `comparing` is deterministic and trivial in M1: with no previous
-//     accepted artifact and no evaluation machinery, the single draft
-//     wins by definition; the event log records that decision.
-//   - Context is assembled naively (prompt v1) — the MCE arrives in M5.
-//   - The divergence candidate is persisted as a draft `proposal`
-//     artifact (§9.1), so a crash mid-synthesis still finds it.
+// M3-T1 is the milestone that completed §8.2 exactly. Pre-M3
+// simplifications (M1 walking skeleton: single-candidate divergence,
+// no evaluation phase, M1 "winner=new by default" comparison) are
+// gone. What survives:
+//   - Context is still assembled naively (prompt v1) — the MCE
+//     arrives in M5. The §12.6 floor rule still applies, so a
+//     context-shortage pause-and-recommend still happens here.
+//   - The ExplorationPath seam in `llm.ResolveTemperature` is wired
+//     but the engine always passes `nil` today (the path table and
+//     stage resolution land later per the ROADMAP backlog).
+//   - The M2-T4 code-archetype sub-steps (`runCodeInPod`,
+//     `runTestsInPod`) run inside the synthesizing phase, with
+//     `running_tests` recorded as an event-row substate (not a
+//     column) per §8.1's "tracked sub-state" note.
+//   - Per-phase audits still flow into the append-only events log.
+//   - The §19.3 comparison rule is enforced as a guard on the
+//     security-persona verdict, not a free-form "LLM said new wins":
+//     if no EvaluationRecord has `better_than_previous: true` and
+//     `confidence > min_judge_confidence`, the verdict is downgraded
+//     to `previous` (or `none` when no prior exists).
 //
-// Crash safety comes from §8.2: state is committed after every
-// transition, so a killed run resumes from its last committed phase via
-// Recover.
+// Crash safety (§8.2): state is committed after every transition, so a
+// killed run resumes from its last committed phase via Recover. The
+// EvaluationRecord table is append-only; recovery resumes into
+// `evaluating` and the engine re-emits records (or reads existing
+// ones via `ListByJob`).
 package engine
 
 import (
@@ -28,6 +43,7 @@ import (
 
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/config"
+	"github.com/tcs76321/athanor/internal/evaluation"
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/llm"
 	"github.com/tcs76321/athanor/internal/project"
@@ -86,6 +102,7 @@ type Engine struct {
 	jobs      *job.Repository
 	projects  *project.Repo
 	artifacts *artifact.Store
+	eval      *evaluation.Repo
 	client    *llm.Client
 	registry  *llm.Registry
 	freezer   Freezer
@@ -115,9 +132,15 @@ type Engine struct {
 // short-circuit without HTTP calls, and the M1 walking skeleton
 // remains usable in unit tests without a pod manager. Production
 // wires *internal/internalapi/runner.HTTPClient.
+//
+// eval is the EvaluationRecord repository (M3-T1). A nil eval is
+// accepted for unit tests that pre-date the evaluation layer; the
+// engine's evaluate/compare phases will return a clear error if
+// reached, which is the right fail-loud behavior (no silent loss of
+// audit data).
 func New(cfg *config.Config, db *store.Store, jobs *job.Repository, projects *project.Repo,
-	artifacts *artifact.Store, client *llm.Client, registry *llm.Registry, freezer Freezer,
-	cap ConcurrencyCap, runner ToolRunner) *Engine {
+	artifacts *artifact.Store, eval *evaluation.Repo, client *llm.Client, registry *llm.Registry,
+	freezer Freezer, cap ConcurrencyCap, runner ToolRunner) *Engine {
 	if cap == nil {
 		// No power source: fall back to a static cap derived from
 		// cfg.Limits so the engine remains usable in tests and
@@ -126,7 +149,7 @@ func New(cfg *config.Config, db *store.Store, jobs *job.Repository, projects *pr
 	}
 	return &Engine{
 		cfg: cfg, db: db, jobs: jobs, projects: projects, artifacts: artifacts,
-		client: client, registry: registry, freezer: freezer, cap: cap,
+		eval: eval, client: client, registry: registry, freezer: freezer, cap: cap,
 		runner:  runner,
 		running: map[string]bool{},
 	}

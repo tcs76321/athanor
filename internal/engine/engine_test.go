@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"sync/atomic"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/config"
 	"github.com/tcs76321/athanor/internal/control"
+	"github.com/tcs76321/athanor/internal/evaluation"
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/llm"
 	"github.com/tcs76321/athanor/internal/power"
@@ -24,22 +26,75 @@ import (
 
 // countingOllama counts chat calls so tests can assert how many LLM
 // requests each path performs.
+//
+// M3-T1: the fake now reads the request's `messages` to discover
+// which role (model) it was asked to play, and returns a content
+// string appropriate for that phase. The security persona's calls
+// (evaluating + comparing) get a JSON verdict the engine can parse;
+// every other persona gets the M1-style prose. This keeps existing
+// tests honest while letting the M3-T1 phases (which demand JSON
+// output) complete.
 type countingOllama struct {
 	*httptest.Server
 	calls int
+	// callsByPhase records the number of LLM calls per phase name
+	// (e.g. "planning", "diverging", "evaluating", "comparing").
+	// Tests assert on this to prove the dialectical loop structure.
+	callsByPhase map[string]int
 }
 
 func newCountingOllama(t *testing.T) *countingOllama {
 	t.Helper()
-	o := &countingOllama{}
+	o := &countingOllama{callsByPhase: map[string]int{}}
 	o.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
 			_, _ = w.Write([]byte(`{"version":"fake"}`))
 			return
 		}
+		// Decode the request to learn which persona was called and
+		// which phase's prompt is in play.
+		var req struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
 		o.calls++
+		// Heuristic: the phase is the first occurrence of "PHASE: X"
+		// in the system+user messages. The prompt assembly writes
+		// the runtime-policy section ("PHASE: EVALUATING …") first.
+		phase := "unknown"
+		for _, m := range req.Messages {
+			if idx := indexOf(m.Content, "PHASE: "); idx >= 0 {
+				rest := m.Content[idx+len("PHASE: "):]
+				for i, c := range rest {
+					if c == '\n' || c == '.' || c == ' ' {
+						phase = rest[:i]
+						break
+					}
+				}
+				break
+			}
+		}
+		o.callsByPhase[phase]++
+		_ = req
+
+		content := "A thoughtful result."
+		// Security persona is used by evaluating + comparing. Both
+		// demand a structured JSON verdict.
+		if isSecurityModel(req.Model) || phase == "EVALUATION" || phase == "COMPARISON" {
+			if phase == "COMPARISON" {
+				content = `{"winner":"new","confidence":0.9,"reasons":["new candidate passes all criteria"],"missing_requirements":[]}`
+			} else {
+				// evaluating
+				content = `{"passed":true,"score":0.9,"failed_tests":[],"missing_criteria":[],"security_issues":[],"style_issues":[],"better_than_previous":true,"confidence":0.9,"summary":"candidate meets all criteria"}`
+			}
+		}
+
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"message":           map[string]string{"role": "assistant", "content": "A thoughtful result."},
+			"message":           map[string]string{"role": "assistant", "content": content},
 			"done":              true,
 			"prompt_eval_count": 10,
 			"eval_count":        5,
@@ -47,6 +102,27 @@ func newCountingOllama(t *testing.T) *countingOllama {
 	}))
 	t.Cleanup(o.Close)
 	return o
+}
+
+// isSecurityModel is a tiny heuristic for the test fake: the
+// `security` persona is wired to a model name that contains
+// "security" in the test registry, OR is empty (the default test
+// registry uses an empty string and the engine infers security from
+// the phase). For the fake's purposes, anything the M1 tests called
+// "main" is fine to return prose; only evaluating+comparing demand
+// JSON. The phase detection above is the actual trigger.
+func isSecurityModel(model string) bool {
+	return strings.Contains(strings.ToLower(model), "security")
+}
+
+// indexOf is a tiny shim for finding substrings in test prompts.
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 type testEnv struct {
@@ -82,6 +158,16 @@ func newEnvWithCfg(t *testing.T, mutate func(*config.Config)) *testEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// M3-T1: the evaluating and comparing phases use the `security`
+	// persona, whose default `ContextTarget` is 8192 — too small for
+	// the default 32768 coding floor. Bump it so the §12.6 feasibility
+	// check passes for every archetype in the test fixtures. The
+	// test fake doesn't care about the actual context size; this is
+	// purely a feasibility arithmetic fix.
+	cfg.Personas.Security.ContextTarget = cfg.ContextEngine.CodingFloor
+	if cfg.Personas.Security.ContextTarget < cfg.ContextEngine.DocumentFloor {
+		cfg.Personas.Security.ContextTarget = cfg.ContextEngine.DocumentFloor
+	}
 	ollama := newCountingOllama(t)
 	cfg.Inference.OllamaURL = ollama.URL
 	if mutate != nil {
@@ -100,7 +186,7 @@ func newEnvWithCfg(t *testing.T, mutate func(*config.Config)) *testEnv {
 		t.Fatal(err)
 	}
 	runner := newFakeRunner()
-	eng := New(cfg, db, jobs, projects, artifacts, llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil), runner)
+	eng := New(cfg, db, jobs, projects, artifacts, evaluation.NewRepo(db), llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, power.NewPowerManager(nil), runner)
 	return &testEnv{cfg: cfg, db: db, jobs: jobs, projects: projects, artifacts: artifacts,
 		freezer: freezer, ollama: ollama, eng: eng, runner: runner}
 }
@@ -154,10 +240,13 @@ func TestRunCompletesFullChain(t *testing.T) {
 	if j.State != job.StateCompleted {
 		t.Fatalf("state = %s, want completed", j.State)
 	}
-	// One LLM call per phase: planning, diverging, synthesizing (comparing
-	// is deterministic in M1).
-	if e.ollama.calls != 3 {
-		t.Errorf("llm calls = %d, want 3", e.ollama.calls)
+	// M3-T1 dialectical loop: planning + 3×diverging + 3×evaluating
+	// + synthesizing + comparing. The default divergence candidate
+	// count is 3; evaluating scales 1:1 with candidates; comparing
+	// asks the security persona for the §19.3 verdict (1 call).
+	// Total = 1 + 3 + 3 + 1 + 1 = 9.
+	if e.ollama.calls != 9 {
+		t.Errorf("llm calls = %d, want 9 (M3-T1: plan + 3*div + 3*eval + synth + compare)", e.ollama.calls)
 	}
 	// Both artifacts exist.
 	if _, err := e.artifacts.LatestForJob(context.Background(), jobID, artifact.KindProposal); err != nil {
@@ -195,7 +284,12 @@ func TestEnqueueRespectsConcurrencyCap(t *testing.T) {
 	}
 
 	// A blocking fake ollama: each call parks on a release channel
-	// so we can hold N jobs in flight at once.
+	// so we can hold N jobs in flight at once. M3-T1: the fake
+	// also returns a JSON verdict for evaluating/comparing calls
+	// (the security persona's output) so the dialectical loop
+	// can parse the response without panicking. The blocking
+	// release happens AFTER the verdict is selected, so a release
+	// during evaluating still returns the JSON the engine expects.
 	released := make(chan struct{})
 	hang := make(chan struct{})
 	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -203,9 +297,38 @@ func TestEnqueueRespectsConcurrencyCap(t *testing.T) {
 			_, _ = w.Write([]byte(`{"version":"fake"}`))
 			return
 		}
+		// Determine the phase by reading the request body.
+		var req struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		phase := "unknown"
+		for _, m := range req.Messages {
+			if idx := strings.Index(m.Content, "PHASE: "); idx >= 0 {
+				rest := m.Content[idx+len("PHASE: "):]
+				for i, c := range rest {
+					if c == '\n' || c == '.' || c == ' ' {
+						phase = rest[:i]
+						break
+					}
+				}
+				break
+			}
+		}
+		content := "x"
+		switch phase {
+		case "EVALUATION":
+			content = `{"passed":true,"score":0.9,"failed_tests":[],"missing_criteria":[],"security_issues":[],"style_issues":[],"better_than_previous":true,"confidence":0.9,"summary":"ok"}`
+		case "COMPARISON":
+			content = `{"winner":"new","confidence":0.9,"reasons":["ok"],"missing_requirements":[]}`
+		}
 		<-hang
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"message":           map[string]string{"role": "assistant", "content": "x"},
+			"message":           map[string]string{"role": "assistant", "content": content},
 			"done":              true,
 			"prompt_eval_count": 1, "eval_count": 1,
 		})
@@ -220,6 +343,7 @@ func TestEnqueueRespectsConcurrencyCap(t *testing.T) {
 	// Cap = 1: the engine must hold at most one in-flight job goroutine.
 	cap := fixedCap{n: 1}
 	eng := New(cfg, db, job.NewRepository(db), project.NewRepo(db), artifacts,
+		evaluation.NewRepo(db),
 		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer, cap, newFakeRunner())
 
 	// Submit two jobs. The first enters the LLM call (blocked on `hang`).

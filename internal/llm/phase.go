@@ -39,14 +39,27 @@ func PhaseSpecFor(phase string) (PhaseSpec, bool) {
 }
 
 // ResolveTemperature applies §13.1 precedence: an attached ExplorationPath
-// stage (M3) would override both inputs; next the phase policy wins over
+// stage (M3) overrides both inputs; next the phase policy wins over
 // the persona default; a phase with no policy leaves the default alone.
 //
-// Precedence implemented here (the ExplorationPath hook arrives with M3
-// and will sit above this function):
+// Precedence (highest to lowest):
 //
-//	phase policy > persona default
-func ResolveTemperature(phase string, personaDefault float64) float64 {
+//	ExplorationPath stage > phase policy > persona default
+//
+// `stageOverride` is the hook for an ExplorationPath stage pinned
+// temperature (§13.2). A non-nil pointer wins outright — the user
+// has explicitly asked for that temperature, so even a 0.0-pinned
+// phase (evaluating, comparing) yields to the override. A nil pointer
+// preserves the M1 behavior (phase policy → persona default).
+//
+// ROADMAP §7 ("Deliberately Deferred"): ExplorationPath persistence
+// and the stage-resolution table land in a later task. M3-T1 only
+// wires the hook so the seam is in place; today every caller passes
+// nil and the result matches M1 byte-for-byte.
+func ResolveTemperature(phase string, personaDefault float64, stageOverride *float64) float64 {
+	if stageOverride != nil {
+		return *stageOverride
+	}
 	spec, ok := phaseSpecs[phase]
 	if !ok {
 		return personaDefault

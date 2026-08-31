@@ -39,6 +39,28 @@ func (a *Store) ListByProject(ctx context.Context, projectID string) ([]Artifact
 	return out, rows.Err()
 }
 
+// LatestAcceptedByProject returns the project's most recently accepted
+// artifact, or ErrNotFound when the project has no accepted artifact
+// yet. Used by §13.1 Phase 6 (Comparing) to find the "previous" side
+// of the §19.3 comparison rule; the comparison phase picks the
+// project's current best, not just any non-rejected artifact.
+//
+// M3-T1 owns this; M3-T5 (git tool) reuses it to pick the base commit
+// for a new accepted artifact. There can be at most one accepted
+// artifact per project at a time (§9.3: accepting a new one
+// supersedes the old), but the query orders by version DESC then
+// created_at DESC to stay correct if that invariant ever relaxes.
+func (a *Store) LatestAcceptedByProject(ctx context.Context, projectID string) (Artifact, error) {
+	row := a.db.DB().QueryRowContext(ctx,
+		artifactSelect+` WHERE project_id = ? AND status = ? ORDER BY version DESC, created_at DESC, id ASC LIMIT 1`,
+		projectID, string(StatusAccepted))
+	art, err := scanArtifact(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Artifact{}, fmt.Errorf("%w: no accepted artifact for project %s", ErrNotFound, projectID)
+	}
+	return art, err
+}
+
 // SetStatus applies a §9.3 status transition.
 func (a *Store) SetStatus(ctx context.Context, id string, to Status) error {
 	art, err := a.Get(ctx, id)

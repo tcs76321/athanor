@@ -213,3 +213,69 @@ func TestContentSurvivesRestart(t *testing.T) {
 		t.Errorf("content across restart = %q, want %q", string(data), "durable")
 	}
 }
+
+// TestLatestAcceptedByProject covers §19.3's "previous" side: the
+// comparison phase picks the project's currently accepted artifact,
+// not just the most recent. The four cases — none, one, multiple
+// accepted (supersede chain), and a rejected artifact that must be
+// ignored — are the corners the engine will hit in production.
+func TestLatestAcceptedByProject(t *testing.T) {
+	a, _, _ := openStore(t)
+	ctx := context.Background()
+
+	t.Run("no accepted artifact returns ErrNotFound", func(t *testing.T) {
+		_, err := a.LatestAcceptedByProject(ctx, "p1")
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("returns the single accepted artifact", func(t *testing.T) {
+		draft, err := a.CreateDraft(ctx, "p1", KindCode, []byte("only"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.SetStatus(ctx, draft.ID, StatusCandidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.SetStatus(ctx, draft.ID, StatusAccepted); err != nil {
+			t.Fatal(err)
+		}
+		got, err := a.LatestAcceptedByProject(ctx, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != draft.ID {
+			t.Errorf("ID = %s, want %s", got.ID, draft.ID)
+		}
+	})
+
+	t.Run("rejected and draft artifacts are ignored", func(t *testing.T) {
+		// A draft (un-accepted) and a rejected candidate both exist
+		// alongside the previously-accepted one. The lookup must
+		// still return the accepted one.
+		rejected, err := a.CreateDraft(ctx, "p1", KindCode, []byte("loser"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.SetStatus(ctx, rejected.ID, StatusCandidate); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.SetStatus(ctx, rejected.ID, StatusRejected); err != nil {
+			t.Fatal(err)
+		}
+		// The previous "returns the single accepted artifact" case
+		// left one accepted artifact. LatestAcceptedByProject
+		// must still find it (and skip the rejected one).
+		got, err := a.LatestAcceptedByProject(ctx, "p1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != StatusAccepted {
+			t.Errorf("status = %s, want %s", got.Status, StatusAccepted)
+		}
+		if got.ID == rejected.ID {
+			t.Errorf("returned rejected artifact %s; LatestAcceptedByProject must skip it", rejected.ID)
+		}
+	})
+}

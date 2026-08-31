@@ -117,37 +117,47 @@ func (f *fakeRunner) run(_ context.Context, jobID string, req toolenvelope.Execu
 //
 // The fake runner is wired into the engine, so any HTTP-shaped
 // call the engine makes lands in the runner's call log. After
-// Run completes, the log has exactly one RunCode call (the
-// divergence proposal is executed in the pod) and one RunTests
-// call ("pytest -q"). Both are recorded as EventLog entries.
+// Run completes, the log has one RunCode call (synthesis phase) and
+// four RunTests calls: 3 from the M3-T1 evaluating phase (one per
+// candidate) and 1 from the synthesis phase.
 func TestRun_CodeArchetypeCallsRunner(t *testing.T) {
 	env := newEnv(t)
 	codeJobID := env.submitCode(t)
 
 	env.eng.Run(context.Background(), codeJobID)
 
-	if got := env.runner.CallCount(); got != 2 {
-		t.Errorf("runner calls = %d, want 2 (RunCode + RunTests)", got)
+	// M3-T1: 3 candidates × RunTests (evaluating) + 1 RunCode + 1
+	// RunTests (synthesizing) = 5 runner calls.
+	if got := env.runner.CallCount(); got != 5 {
+		t.Errorf("runner calls = %d, want 5 (M3-T1: 3*evaluating RunTests + RunCode + synth RunTests)", got)
 	}
 	calls := env.runner.Calls()
-	if len(calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(calls))
+	if len(calls) != 5 {
+		t.Fatalf("calls = %d, want 5", len(calls))
 	}
-	byKind := map[string]fakeCall{}
+	codeCount, testCount := 0, 0
+	var codeCall, testCall fakeCall
 	for _, c := range calls {
-		byKind[c.Tool] = c
+		switch c.Tool {
+		case "RunCode":
+			codeCount++
+			codeCall = c
+		case "RunTests":
+			testCount++
+			testCall = c
+		}
 	}
-	if _, ok := byKind["RunCode"]; !ok {
-		t.Error("no RunCode call in runner log")
+	if codeCount != 1 {
+		t.Errorf("RunCode calls = %d, want 1", codeCount)
 	}
-	if _, ok := byKind["RunTests"]; !ok {
-		t.Error("no RunTests call in runner log")
+	if codeCall.Lang != "python" {
+		t.Errorf("RunCode language = %q, want python", codeCall.Lang)
 	}
-	if rc := byKind["RunCode"]; rc.Lang != "python" {
-		t.Errorf("RunCode language = %q, want python", rc.Lang)
+	if testCount != 4 {
+		t.Errorf("RunTests calls = %d, want 4 (3 evaluating + 1 synthesizing)", testCount)
 	}
-	if rt := byKind["RunTests"]; rt.Cmd != "pytest -q" {
-		t.Errorf("RunTests command = %q, want pytest -q", rt.Cmd)
+	if testCall.Cmd != "pytest -q" {
+		t.Errorf("RunTests command = %q, want pytest -q", testCall.Cmd)
 	}
 }
 

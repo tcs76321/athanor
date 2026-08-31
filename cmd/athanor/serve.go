@@ -17,6 +17,7 @@ import (
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/engine"
+	"github.com/tcs76321/athanor/internal/evaluation"
 	"github.com/tcs76321/athanor/internal/internalapi"
 	"github.com/tcs76321/athanor/internal/internalapi/runner"
 	"github.com/tcs76321/athanor/internal/job"
@@ -134,6 +135,11 @@ func run(configPath, addr, stateDir string) error {
 		job.NewRepository(st),
 		project.NewRepo(st),
 		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
+		// M3-T1: EvaluationRecord repository (§19). The engine
+		// persists one record per candidate artifact during
+		// the evaluating phase; the comparison phase reads
+		// them back.
+		evaluation.NewRepo(st),
 		llm.NewClient(cfg.Inference.OllamaURL, nil),
 		registry,
 		killSwitch,

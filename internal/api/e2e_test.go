@@ -14,6 +14,11 @@ import (
 )
 
 // fakeOllama answers every chat request with a canned completion.
+// M3-T1: the fake detects the phase from the request body and
+// returns a structured JSON verdict for the evaluating and
+// comparing phases (the security persona's output). Other phases
+// get the M1-style prose, which downstream test assertions still
+// look for via the "A thoughtful result." substring.
 func fakeOllama(t *testing.T) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,8 +26,36 @@ func fakeOllama(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"version":"fake"}`))
 			return
 		}
+		// Phase detection mirrors the engine test fake.
+		var req struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		phase := ""
+		for _, m := range req.Messages {
+			if idx := strings.Index(m.Content, "PHASE: "); idx >= 0 {
+				rest := m.Content[idx+len("PHASE: "):]
+				for i, c := range rest {
+					if c == '\n' || c == '.' || c == ' ' {
+						phase = rest[:i]
+						break
+					}
+				}
+				break
+			}
+		}
+		content := "A thoughtful result."
+		switch phase {
+		case "EVALUATION":
+			content = `{"passed":true,"score":0.9,"failed_tests":[],"missing_criteria":[],"security_issues":[],"style_issues":[],"better_than_previous":true,"confidence":0.9,"summary":"ok"}`
+		case "COMPARISON":
+			content = `{"winner":"new","confidence":0.9,"reasons":["ok"],"missing_requirements":[]}`
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"message":           map[string]string{"role": "assistant", "content": "A thoughtful result."},
+			"message":           map[string]string{"role": "assistant", "content": content},
 			"done":              true,
 			"prompt_eval_count": 100,
 			"eval_count":        20,

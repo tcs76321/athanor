@@ -11,6 +11,7 @@ import (
 	"github.com/tcs76321/athanor/internal/config"
 	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/engine"
+	"github.com/tcs76321/athanor/internal/evaluation"
 	"github.com/tcs76321/athanor/internal/job"
 	"github.com/tcs76321/athanor/internal/llm"
 	"github.com/tcs76321/athanor/internal/power"
@@ -61,6 +62,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	eng := engine.New(cfg, st, jobs, projects, artifacts,
+		evaluation.NewRepo(st),
 		llm.NewClient(cfg.Inference.OllamaURL, nil), registry, freezer,
 		power.NewPowerManager(nil),
 		// M2-T4: the api harness exercises the M1 walking

@@ -11,17 +11,17 @@ import (
 	"github.com/tcs76321/athanor/internal/prompt"
 )
 
-// step performs the single phase named by j.State and transitions to the
-// next state.
+// step performs the single phase named by j.State and transitions to
+// the next state. M3-T1: every §8.1 state is handled explicitly
+// (ADR-0001: "M3-T1 completes §8 exactly"). The phase bodies live
+// across this package:
 //
-// M3-T1 scaffolding: `evaluating` and `reflecting` are now valid phases
-// per §8.2. The full multi-candidate divergence and the rubric-bearing
-// phaseEvaluate/phaseReflect land in the next M3-T1 commit; for now the
-// engine routes through them as transparent hops so the M1 walking-
-// skeleton chain (now: planning → diverging → evaluating → synthesizing
-// → comparing → completed) keeps working end-to-end. This keeps the
-// state-machine commit independently green; M3-T1's engine commit
-// replaces these no-op hops with real phase work.
+//	phasePlan        (below)        — §13.1 Phase 1
+//	phaseDivergeN    (diverge.go)   — §13.1 Phase 2
+//	phaseEvaluate    (evaluate.go)  — §13.1 Phase 3
+//	phaseReflect     (reflect.go)   — §13.1 Phase 4
+//	phaseSynthesize  (below)        — §13.1 Phase 5
+//	phaseCompare     (compare.go)   — §13.1 Phase 6
 func (e *Engine) step(ctx context.Context, j job.Job) error {
 	switch j.State {
 	case job.StateQueued:
@@ -35,21 +35,11 @@ func (e *Engine) step(ctx context.Context, j job.Job) error {
 	case job.StatePlanning:
 		return e.phasePlan(ctx, j)
 	case job.StateDiverging:
-		return e.phaseDiverge(ctx, j)
+		return e.phaseDivergeN(ctx, j)
 	case job.StateEvaluating:
-		// M3-T1 scaffolding hop. The real `phaseEvaluate` (security
-		// persona, temp 0.0, EvaluationRecord persistence, code-archetype
-		// substate) lands in the engine commit.
-		_, err := e.jobs.Transition(ctx, j.ID, job.StateSynthesizing)
-		return err
+		return e.phaseEvaluate(ctx, j)
 	case job.StateReflecting:
-		// M3-T1 scaffolding hop. The real `phaseReflect` (branch logic,
-		// budget tracking) lands in the engine commit. For now this is
-		// unreachable: phaseDiverge routes into evaluating directly and
-		// the evaluating-scaffolding hop goes to synthesizing. Kept
-		// here so the §8.2 legal edge does not get a "no handler" error
-		// once the reflection branch is wired in the next commit.
-		return fmt.Errorf("engine: phaseReflect not yet implemented (M3-T1 engine commit)")
+		return e.phaseReflect(ctx, j)
 	case job.StateSynthesizing:
 		return e.phaseSynthesize(ctx, j)
 	case job.StateComparing:
@@ -109,7 +99,7 @@ func (e *Engine) call(ctx context.Context, j job.Job, p project.Project, t proje
 	if err != nil {
 		return llm.Response{}, err
 	}
-	temperature := llm.ResolveTemperature(phase, persona.Temperature)
+	temperature := llm.ResolveTemperature(phase, persona.Temperature, nil)
 
 	// Per-phase wall-time budget (§8.2); falls back to the default budget.
 	budget, hasBudget := e.cfg.Execution.PhaseBudget(phase)
@@ -220,26 +210,6 @@ func (e *Engine) phaseSynthesize(ctx context.Context, j job.Job) error {
 // accepted artifact, and no evaluation machinery (M3), the comparison is
 // deterministic: the draft wins by default. The decision and its rationale
 // are audited; the artifact stays a draft until real evaluation exists.
-func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
-	p, _, err := e.contexts(ctx, j)
-	if err != nil {
-		return err
-	}
-	final, err := e.artifacts.LatestForJob(ctx, j.ID, finalKindFor(p.Archetype))
-	if err != nil {
-		return fmt.Errorf("loading final artifact for comparison: %w", err)
-	}
-	e.audit(ctx, j.ID, map[string]any{
-		"event": "comparison", "winner": "new", "confidence": 1.0,
-		"reasons": []string{
-			"M1 single-candidate mode: no previous accepted artifact exists, so the draft wins by definition (§19.3).",
-		},
-		"artifact_id": final.ID,
-	})
-	_, err = e.jobs.Transition(ctx, j.ID, job.StateCompleted)
-	return err
-}
-
 // phasePlan (§13.1 Phase 1): tall persona, low temperature. The plan
 // guides divergence; in M1 it is advisory context, not persisted.
 func (e *Engine) phasePlan(ctx context.Context, j job.Job) error {
@@ -254,31 +224,3 @@ func (e *Engine) phasePlan(ctx context.Context, j job.Job) error {
 	return err
 }
 
-// phaseDiverge (§13.1 Phase 2): main persona generates the single M1
-// candidate, persisted as a draft proposal artifact (§9.1) so a crash
-// mid-synthesis can still find it.
-//
-// M3-T1 state-machine commit: §8.2 mandates that divergence is
-// followed by evaluation, never synthesis directly. The candidate
-// content and persistence are unchanged; the next-state transition
-// routes into `evaluating` where the M3-T1 engine commit will perform
-// the real security-persona evaluation. The current commit's `step`
-// switch hops evaluating → synthesizing as a placeholder so the M1
-// walking-skeleton chain (and every existing test) still completes
-// without invoking the not-yet-written phaseEvaluate.
-func (e *Engine) phaseDiverge(ctx context.Context, j job.Job) error {
-	p, t, err := e.contexts(ctx, j)
-	if err != nil {
-		return err
-	}
-	resp, err := e.call(ctx, j, p, t, llm.PhaseDiverging, llm.RoleMain, "")
-	if err != nil {
-		return err
-	}
-	if _, err := e.artifacts.CreateDraftFor(ctx, p.ID, t.ID, j.ID,
-		artifact.KindProposal, []byte(resp.Content)); err != nil {
-		return fmt.Errorf("persisting divergence candidate: %w", err)
-	}
-	_, err = e.jobs.Transition(ctx, j.ID, job.StateEvaluating)
-	return err
-}

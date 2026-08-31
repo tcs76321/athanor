@@ -4,7 +4,8 @@ import "testing"
 
 // TestResolveTemperature encodes the full §13.1 precedence table:
 // phase policy (pin or range-clamp) over persona defaults, and untouched
-// defaults for phases without a policy.
+// defaults for phases without a policy. M3-T1's stage-override hook
+// (ExplorationPath seam) is exercised separately in TestResolveTemperatureStageOverride.
 func TestResolveTemperature(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -46,11 +47,37 @@ func TestResolveTemperature(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ResolveTemperature(tc.phase, tc.personaDefault); got != tc.want {
-				t.Errorf("ResolveTemperature(%q, %v) = %v, want %v", tc.phase, tc.personaDefault, got, tc.want)
+			if got := ResolveTemperature(tc.phase, tc.personaDefault, nil); got != tc.want {
+				t.Errorf("ResolveTemperature(%q, %v, nil) = %v, want %v",
+					tc.phase, tc.personaDefault, got, tc.want)
 			}
 		})
 	}
+}
+
+// TestResolveTemperatureStageOverride covers the M3-T1 ExplorationPath
+// hook: a non-nil stageOverride wins outright, even over a 0.0-pinned
+// phase. This is the contract that makes future ExplorationPath
+// support a thin pass-through on the call site: the engine passes
+// nil today, and the resolver behaves identically to the M1 form.
+func TestResolveTemperatureStageOverride(t *testing.T) {
+	t.Run("override wins over 0.0 pin", func(t *testing.T) {
+		one := 1.0
+		if got := ResolveTemperature(PhaseEvaluating, 0.0, &one); got != 1.0 {
+			t.Errorf("evaluating with stage=1.0 = %v, want 1.0 (override must beat the 0.0 pin)", got)
+		}
+	})
+	t.Run("override wins over range clamp", func(t *testing.T) {
+		zero := 0.0
+		if got := ResolveTemperature(PhaseDiverging, 0.8, &zero); got != 0.0 {
+			t.Errorf("diverging with stage=0.0 = %v, want 0.0 (override must beat the [0.7,1.1] range)", got)
+		}
+	})
+	t.Run("nil preserves M1 behavior", func(t *testing.T) {
+		if got := ResolveTemperature(PhaseEvaluating, 0.4, nil); got != 0.0 {
+			t.Errorf("evaluating with nil stage = %v, want 0.0 (M1 form unchanged)", got)
+		}
+	})
 }
 
 func TestPhaseSpecFor(t *testing.T) {

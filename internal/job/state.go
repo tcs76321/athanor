@@ -1,10 +1,15 @@
 // Package job implements the job state machine (ARCHITECTURE §8) and its
 // SQLite-backed repository.
 //
-// The M1 edge set follows ADR-0001: evaluating/reflecting edges arrive
-// with Job Pods in M3, awaiting_approval with HITL in M6. The schema
-// (migration 0004) accepts the full §8.1 state set; this package decides
-// which transitions are legal *now*.
+// M3-T1 completes §8.2 exactly: the transitions table below now encodes
+// the full graph (planning → diverging → evaluating → reflecting →
+// synthesizing → comparing → completed/failed) with the §8.2 branch
+// logic — evaluating always runs after diverging (§8.2: "no skipping
+// evaluation"); reflecting is reached only when no candidate passed
+// evaluation, and loops back to diverging within the M3-T4 budget.
+// The schema (migration 0004) accepts the full §8.1 state set so the
+// edge set could grow without a rebuild. The only edge still absent
+// here is `awaiting_approval`, which arrives with HITL in M6.
 package job
 
 import "fmt"
@@ -51,27 +56,45 @@ func (s State) Valid() bool {
 	}
 }
 
-// transitions is the M1 legal-edge table (§8.2 + ADR-0001). Pausing is
-// legal from every active working state; a paused job resumes to the
-// state recorded in paused_from (enforced by the repository, since the
-// table cannot express data-dependent edges). queued jobs cannot pause —
-// they simply never start.
+// transitions is the full §8.2 legal-edge table (M3-T1: ADR-0001's
+// "M3-T1 completes §8 exactly" lands here; Gate G3's
+// TestLegalTransitions/IllegalTransitions pin the graph).
+//
+// §8.2 branch rules are encoded in this table, not in the engine:
+//
+//   - `diverging → evaluating` is mandatory (no skipping evaluation).
+//   - `evaluating → synthesizing` is the happy path (≥1 candidate passed).
+//   - `evaluating → reflecting` is the failure path (no candidate passed).
+//   - `reflecting → diverging` is the budgeted retry loop.
+//   - `reflecting → synthesizing` lets reflection produce a final artifact
+//     without another divergence pass (e.g. "hybrid of the two best").
+//   - `synthesizing → comparing` is mandatory.
+//   - Pausing is legal from every active working state; a paused job
+//     resumes to the state recorded in paused_from (enforced by the
+//     repository, since the table cannot express data-dependent edges).
+//   - queued jobs cannot pause — they simply never start.
+//
+// `awaiting_approval` (M6) is deliberately not an outgoing edge of any
+// state: HITL hasn't been wired. Its existence in the §8.1 state set
+// satisfies the schema (migration 0004) but no code path can transition
+// into or out of it yet.
 var transitions = map[State][]State{
 	StateQueued:          {StateContextBuilding, StateCancelled},
 	StateContextBuilding: {StatePlanning, StatePaused, StateFailed, StateCancelled},
 	StatePlanning:        {StateDiverging, StatePaused, StateFailed, StateCancelled},
-	StateDiverging:       {StateSynthesizing, StatePaused, StateFailed, StateCancelled}, // → evaluating arrives in M3
+	StateDiverging:       {StateEvaluating, StatePaused, StateFailed, StateCancelled},
+	StateEvaluating:      {StateSynthesizing, StateReflecting, StatePaused, StateFailed, StateCancelled},
+	StateReflecting:      {StateDiverging, StateSynthesizing, StatePaused, StateFailed, StateCancelled},
 	StateSynthesizing:    {StateComparing, StatePaused, StateFailed, StateCancelled},
 	StateComparing:       {StateCompleted, StateFailed, StatePaused, StateCancelled},
-	StatePaused:          {StateContextBuilding, StatePlanning, StateDiverging, StateSynthesizing, StateCancelled},
+	StatePaused:          {StateContextBuilding, StatePlanning, StateDiverging, StateEvaluating, StateReflecting, StateSynthesizing, StateCancelled},
 	// Terminal states have no outgoing edges by construction (absent map
-	// entries). Evaluating/reflecting/awaiting_approval edges arrive with
-	// M3/M6 per ADR-0001.
+	// entries).
 }
 
-// CanTransition reports whether from → to is a legal M1 edge. The paused
-// resume edge additionally requires to == paused_from; that rule is
-// enforced by the repository because it depends on stored data.
+// CanTransition reports whether from → to is a legal §8.2 edge. The
+// paused-resume edge additionally requires to == paused_from; that rule
+// is enforced by the repository because it depends on stored data.
 func CanTransition(from, to State) bool {
 	if !from.Valid() || !to.Valid() || from == to {
 		return false

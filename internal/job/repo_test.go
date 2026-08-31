@@ -93,7 +93,7 @@ func TestFullLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	j = runTo(t, r, j.ID,
-		StateContextBuilding, StatePlanning, StateDiverging, StateSynthesizing, StateComparing, StateCompleted)
+		StateContextBuilding, StatePlanning, StateDiverging, StateEvaluating, StateSynthesizing, StateComparing, StateCompleted)
 
 	if j.State != StateCompleted {
 		t.Errorf("final state = %q, want completed", j.State)
@@ -110,9 +110,9 @@ func TestFullLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// created + 6 transitions
-	if len(events) != 7 {
-		t.Fatalf("got %d events, want 7 (created + 6 transitions)", len(events))
+	// created + 7 transitions (post-§8.2 evaluating is mandatory after diverging)
+	if len(events) != 8 {
+		t.Fatalf("got %d events, want 8 (created + 7 transitions)", len(events))
 	}
 
 	// Terminal states admit no further transitions.

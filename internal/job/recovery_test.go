@@ -93,19 +93,20 @@ func TestCrashRecoveryResumesFromLastCommittedState(t *testing.T) {
 	if after.StartedAt == nil {
 		t.Error("started_at lost across restart")
 	}
-	// Resume: the remaining legal path completes.
-	resumed := runTo(t, r2, j.ID, StateSynthesizing, StateComparing, StateCompleted)
+	// Resume: the remaining legal path completes (post-§8.2 evaluating
+	// is mandatory after diverging).
+	resumed := runTo(t, r2, j.ID, StateEvaluating, StateSynthesizing, StateComparing, StateCompleted)
 	if resumed.State != StateCompleted {
 		t.Errorf("resumed job state = %q, want completed", resumed.State)
 	}
 
-	// The audit trail survives too: created + 3 pre-crash + 3 post-crash
-	// transitions.
+	// The audit trail survives too: created + 3 pre-crash + 4 post-crash
+	// transitions (post-§8.2 evaluating is mandatory after diverging).
 	events, err := s2.QueryEvents(ctx, store.EventFilter{JobID: j.ID, Category: "jobs"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 7 {
-		t.Errorf("events across crash = %d, want 7", len(events))
+	if len(events) != 8 {
+		t.Errorf("events across crash = %d, want 8", len(events))
 	}
 }

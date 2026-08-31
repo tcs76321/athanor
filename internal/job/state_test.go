@@ -5,7 +5,10 @@ import (
 	"testing"
 )
 
-// TestLegalTransitions pins the exact M1 edge set (§8.2 + ADR-0001).
+// TestLegalTransitions pins the full §8.2 edge set (M3-T1: ADR-0001's
+// "M3-T1 completes §8 exactly" lands here). Every legal edge in
+// `transitions` is enumerated; if the table grows, this test will fail
+// and force the new edge to be added consciously.
 func TestLegalTransitions(t *testing.T) {
 	legal := []struct{ from, to State }{
 		{StateQueued, StateContextBuilding},
@@ -18,10 +21,20 @@ func TestLegalTransitions(t *testing.T) {
 		{StatePlanning, StatePaused},
 		{StatePlanning, StateFailed},
 		{StatePlanning, StateCancelled},
-		{StateDiverging, StateSynthesizing}, // → evaluating arrives in M3
+		{StateDiverging, StateEvaluating}, // §8.2: evaluating is mandatory
 		{StateDiverging, StatePaused},
 		{StateDiverging, StateFailed},
 		{StateDiverging, StateCancelled},
+		{StateEvaluating, StateSynthesizing}, // happy path: ≥1 candidate passed
+		{StateEvaluating, StateReflecting},   // failure path: 0 passed
+		{StateEvaluating, StatePaused},
+		{StateEvaluating, StateFailed},
+		{StateEvaluating, StateCancelled},
+		{StateReflecting, StateDiverging},   // §13.1 budgeted retry loop
+		{StateReflecting, StateSynthesizing},
+		{StateReflecting, StatePaused},
+		{StateReflecting, StateFailed},
+		{StateReflecting, StateCancelled},
 		{StateSynthesizing, StateComparing},
 		{StateSynthesizing, StatePaused},
 		{StateSynthesizing, StateFailed},
@@ -30,12 +43,17 @@ func TestLegalTransitions(t *testing.T) {
 		{StateComparing, StateFailed},
 		{StateComparing, StatePaused},
 		{StateComparing, StateCancelled},
-		{StatePaused, StatePlanning}, // legal shape; data rule in repo
+		{StatePaused, StateContextBuilding},
+		{StatePaused, StatePlanning},
+		{StatePaused, StateDiverging},
+		{StatePaused, StateEvaluating},
+		{StatePaused, StateReflecting},
+		{StatePaused, StateSynthesizing},
 		{StatePaused, StateCancelled},
 	}
 	for _, tc := range legal {
 		if !CanTransition(tc.from, tc.to) {
-			t.Errorf("CanTransition(%s → %s) = false, want legal M1 edge", tc.from, tc.to)
+			t.Errorf("CanTransition(%s → %s) = false, want legal §8.2 edge", tc.from, tc.to)
 		}
 		if err := ValidateTransition(tc.from, tc.to); err != nil {
 			t.Errorf("ValidateTransition(%s → %s) = %v, want nil", tc.from, tc.to, err)
@@ -44,7 +62,9 @@ func TestLegalTransitions(t *testing.T) {
 }
 
 // TestIllegalTransitions covers the non-edges: skipped phases, backwards
-// moves, M3/M6 edges that do not exist yet (ADR-0001), and self-loops.
+// moves, edges into `awaiting_approval` (M6 does not exist yet), and
+// self-loops. Every §8.2-mandated adjacency is in the legal table; this
+// list is the explicit "and these adjacencies are NOT legal" guard.
 func TestIllegalTransitions(t *testing.T) {
 	illegal := []struct{ from, to State }{
 		{StateQueued, StatePlanning},  // skip context_building
@@ -55,20 +75,30 @@ func TestIllegalTransitions(t *testing.T) {
 		{StateContextBuilding, StateDiverging}, // skip planning
 		{StatePlanning, StateSynthesizing},     // skip diverging
 		{StatePlanning, StateComparing},
-		{StateDiverging, StateComparing},    // skip synthesizing
-		{StateDiverging, StateEvaluating},   // arrives in M3 (ADR-0001)
-		{StateSynthesizing, StateCompleted}, // comparing is mandatory
-		{StateComparing, StateSynthesizing}, // no backwards edges
-		{StateCompleted, StateQueued},       // terminal states are final
+		{StatePlanning, StateEvaluating}, // skip diverging
+		{StateDiverging, StateComparing},    // skip evaluating + synthesizing
+		{StateDiverging, StateSynthesizing}, // skip evaluating
+		{StateDiverging, StateReflecting},    // reflection is post-evaluating
+		{StateEvaluating, StateDiverging},    // no backwards edges
+		{StateEvaluating, StateComparing},    // skip synthesizing
+		{StateSynthesizing, StateCompleted},  // comparing is mandatory
+		{StateSynthesizing, StateDiverging},  // no backwards edges
+		{StateSynthesizing, StateEvaluating}, // no backwards edges
+		{StateComparing, StateSynthesizing},  // no backwards edges
+		{StateComparing, StateReflecting},    // reflection is pre-comparing
+		{StateCompleted, StateQueued},         // terminal states are final
 		{StateFailed, StateQueued},
 		{StateFailed, StateComparing},
 		{StateCancelled, StateQueued},
 		{StateCompleted, StateCompleted}, // self-loops
 		{StatePaused, StatePaused},
 		{StatePlanning, StatePlanning},
+		{StateEvaluating, StateEvaluating},
+		{StateDiverging, StateDiverging},
 		{StatePaused, StateAwaitingApproval}, // M6 edge does not exist yet
-		{StateComparing, StateReflecting},    // M3 edge does not exist yet
-		{"bogus", StatePlanning},             // unknown states
+		{StateComparing, StateAwaitingApproval},
+		{StateCompleted, StateAwaitingApproval},
+		{"bogus", StatePlanning}, // unknown states
 		{StatePlanning, "bogus"},
 	}
 	for _, tc := range illegal {

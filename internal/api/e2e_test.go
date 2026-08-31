@@ -123,7 +123,7 @@ func TestEndToEndWalkingSkeleton(t *testing.T) {
 			sequence = append(sequence, d.To)
 		}
 	}
-	want := []string{"context_building", "planning", "diverging", "synthesizing", "comparing", "completed"}
+	want := []string{"context_building", "planning", "diverging", "evaluating", "synthesizing", "comparing", "completed"}
 	if strings.Join(sequence, ",") != strings.Join(want, ",") {
 		t.Errorf("transition sequence = %v, want %v", sequence, want)
 	}

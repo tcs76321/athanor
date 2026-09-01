@@ -225,7 +225,18 @@ func (e *Engine) evaluateCandidate(ctx context.Context, j job.Job, p project.Pro
 		return evaluation.Record{}, fmt.Errorf("reading candidate content: %w", err)
 	}
 
-	instructions := fmt.Sprintf(
+	// M3-T2 (commit 2.2): the per-archetype rubric goes to the
+	// persona first so the verdict's `missing_criteria` /
+	// `security_issues` / `style_issues` arrays map 1:1 to
+	// rubric items. Empty for data/media (deferred) and for
+	// unknown archetypes.
+	rubric := rubricFor(p.Archetype)
+	var rubricBlock string
+	if rubric != "" {
+		rubricBlock = "## RUBRIC (apply every item; echo unmet items into missing_criteria or security_issues or style_issues)\n" + rubric + "\n\n"
+	}
+
+	instructions := rubricBlock + fmt.Sprintf(
 		"EVALUATE CANDIDATE %d of %d (artifact_id=%s). "+
 			"Tests already ran in the Job Pod: passed=%v, failed_tests=%v. "+
 			"Apply the §19 acceptance-criteria check to the candidate content below. "+

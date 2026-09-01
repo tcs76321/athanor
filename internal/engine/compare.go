@@ -97,31 +97,16 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 		return fmt.Errorf("parsing comparison verdict: %w", err)
 	}
 
-	// §19.3 deterministic guard.
+	// M3-T2 commit 2.5: the §19.3 deterministic guard is now
+	// a pure function in decide.go. The caller resolves the
+	// threshold (config default 0.7 when zero) and
+	// `hasPrevious` (whether the project has a prior
+	// accepted artifact) before the call.
 	threshold := e.cfg.Execution.MinJudgeConfidence
 	if threshold <= 0 {
 		threshold = 0.7
 	}
-	strongNew := false
-	for _, r := range records {
-		if r.BetterThanPrevious && r.Confidence > threshold {
-			strongNew = true
-			break
-		}
-	}
-	if verdict.Winner == "new" && !strongNew {
-		// LLM said "new" but no EvaluationRecord backs it up.
-		// Downgrade to "previous" if one exists, else "none".
-		if previousID != "" {
-			verdict.Winner = "previous"
-			verdict.Reasons = append(verdict.Reasons,
-				fmt.Sprintf("downgraded from 'new' to 'previous': no EvaluationRecord met better_than_previous + confidence > %.2f", threshold))
-		} else {
-			verdict.Winner = "none"
-			verdict.Reasons = append(verdict.Reasons,
-				fmt.Sprintf("downgraded from 'new' to 'none': no prior accepted artifact and no EvaluationRecord met confidence > %.2f", threshold))
-		}
-	}
+	verdict = DecideWinner(verdict, records, threshold, previousID != "")
 
 	e.audit(ctx, j.ID, map[string]any{
 		"event":                "comparison",

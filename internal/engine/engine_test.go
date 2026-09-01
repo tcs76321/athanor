@@ -43,6 +43,11 @@ type countingOllama struct {
 	callsByPhase   map[string]int
 	evalVerdicts   []string
 	comparisonVerdicts []string
+	// delay is the artificial latency the fake introduces per
+	// request. Tests for the per-phase wall-time budget
+	// (M3-T2 commit 2.4) set this to a value larger than the
+	// budget to exercise the deadline path. Default 0.
+	delay time.Duration
 }
 
 func newCountingOllama(t *testing.T) *countingOllama {
@@ -89,6 +94,26 @@ func newCountingOllama(t *testing.T) *countingOllama {
 		_ = req
 
 		content := "A thoughtful result."
+		// M3-T2 commit 2.4: sleep for the configured delay
+		// after reading the request body, but only if the
+		// request's context is still alive. (The client's
+		// http.NewRequestWithContext cancellation propagates
+		// through http.Do, but the handler is the one that
+		// returns to the wire; we need to keep the response
+		// short so the client sees a context-deadline error
+		// rather than a closed-connection error.)
+		if o.delay > 0 {
+			delay := o.delay
+			// Honor the request's context: if the client
+			// canceled, return immediately so the
+			// response-body read on the client side is a
+			// network error, not a 200 with a wrong body.
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		// Security persona is used by evaluating + comparing. Both
 		// demand a structured JSON verdict.
 		if isSecurityModel(req.Model) || phase == "EVALUATION" || phase == "COMPARISON" {
@@ -131,6 +156,16 @@ func newCountingOllama(t *testing.T) *countingOllama {
 // JSON. The phase detection above is the actual trigger.
 func isSecurityModel(model string) bool {
 	return strings.Contains(strings.ToLower(model), "security")
+}
+
+// WithDelay configures the fake to sleep `d` per request. Tests
+// for the per-phase wall-time budget (M3-T2 commit 2.4) use
+// this to simulate a slow Ollama and exercise the
+// context-deadline path.
+func (o *countingOllama) WithDelay(d time.Duration) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.delay = d
 }
 
 type testEnv struct {

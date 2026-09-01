@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/tcs76321/athanor/internal/artifact"
 	"github.com/tcs76321/athanor/internal/job"
@@ -116,6 +118,21 @@ func (e *Engine) call(ctx context.Context, j job.Job, p project.Project, t proje
 		ContextTarget: persona.ContextTarget,
 	})
 	if err != nil {
+		// M3-T2 commit 2.4: when the per-phase wall-time budget
+		// fires, the call's ctx is `context.DeadlineExceeded`.
+		// Emit a `context_deadline_exceeded` audit row so the
+		// failure is observable in the EventLog (the job still
+		// transitions to `failed` via the step()/Run() path;
+		// this row is the *why*).
+		if errors.Is(err, context.DeadlineExceeded) {
+			e.audit(ctx, j.ID, map[string]any{
+				"event":      "context_deadline_exceeded",
+				"phase":      phase,
+				"persona":    role,
+				"model":      persona.Model,
+				"budget_sec": int64(budget / time.Second),
+			})
+		}
 		return llm.Response{}, fmt.Errorf("phase %s: %w", phase, err)
 	}
 

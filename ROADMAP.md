@@ -268,6 +268,7 @@ Post-M7 capability. Listed so ideas have a home without derailing the current mi
 | Full Statistics / Memory Browser views | Retrieval test tool, compaction layer viewer, usage dashboards (§27). |
 | Host Adapter polish | System tray states, fsnotify-driven proactive triggers. Minimal version only in M7. |
 | Recurring/triggered task types | Cron and event-triggered tasks after one-time tasks prove the scheduler. |
+| `artifact.Store.ListByJob` + retire raw SQL in M3-T1 tests | M3 cleanup (not post-M7). The E1 dialectical-loop test in `internal/engine/multicandidate_test.go` runs `env.db.DB().QueryContext(...)` to count proposal artifacts because no `ListByJob` method exists on `artifact.Store`; the evaluation repo has one (`internal/evaluation/repo.go`), the artifact repo does not. Add the method, route the test through `env.artifacts.*`, and remove the raw SQL. Discovered during the `sqlrowserr` fix for the M3-T1 test suite (`755e3d8`). |
 
 ---
 

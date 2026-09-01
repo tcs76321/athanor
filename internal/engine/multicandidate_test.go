@@ -96,15 +96,20 @@ func TestRun_FullDialecticalChain_ThreeCandidates_CodeArchetype(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = proposalRows.Close() }()
 	var proposalCount int
 	for proposalRows.Next() {
 		var id, kind, status string
-		_ = proposalRows.Scan(&id, &kind, &status)
+		if err := proposalRows.Scan(&id, &kind, &status); err != nil {
+			t.Fatalf("scanning proposal row: %v", err)
+		}
 		if kind == "proposal" {
 			proposalCount++
 		}
 	}
-	_ = proposalRows.Close()
+	if err := proposalRows.Err(); err != nil {
+		t.Fatalf("iterating proposal rows: %v", err)
+	}
 	if proposalCount != 3 {
 		t.Errorf("proposal artifacts = %d, want 3", proposalCount)
 	}
@@ -265,6 +270,3 @@ func TestRun_ComparisonPicksNoneWhenAllFail(t *testing.T) {
 		t.Errorf("COMPARISON calls = %d, want 0 (no passing candidates so no compare)", calls["COMPARISON"])
 	}
 }
-
-
-

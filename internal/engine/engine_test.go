@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync/atomic"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,11 +38,11 @@ import (
 // output) complete.
 type countingOllama struct {
 	*httptest.Server
-	calls int
-	// callsByPhase records the number of LLM calls per phase name
-	// (e.g. "planning", "diverging", "evaluating", "comparing").
-	// Tests assert on this to prove the dialectical loop structure.
-	callsByPhase map[string]int
+	mu             sync.Mutex
+	calls          int
+	callsByPhase   map[string]int
+	evalVerdicts   []string
+	comparisonVerdicts []string
 }
 
 func newCountingOllama(t *testing.T) *countingOllama {
@@ -51,8 +53,11 @@ func newCountingOllama(t *testing.T) *countingOllama {
 			_, _ = w.Write([]byte(`{"version":"fake"}`))
 			return
 		}
-		// Decode the request to learn which persona was called and
-		// which phase's prompt is in play.
+		// Read the body fully (not via Decoder) to keep the handler
+		// independent of how the client closes the request stream;
+		// the LLM client sends a Content-Length body that the
+		// server can read in one go.
+		bodyBytes, _ := io.ReadAll(r.Body)
 		var req struct {
 			Model    string `json:"model"`
 			Messages []struct {
@@ -60,14 +65,16 @@ func newCountingOllama(t *testing.T) *countingOllama {
 				Content string `json:"content"`
 			} `json:"messages"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.Unmarshal(bodyBytes, &req)
+
+		o.mu.Lock()
 		o.calls++
 		// Heuristic: the phase is the first occurrence of "PHASE: X"
 		// in the system+user messages. The prompt assembly writes
 		// the runtime-policy section ("PHASE: EVALUATING …") first.
 		phase := "unknown"
 		for _, m := range req.Messages {
-			if idx := indexOf(m.Content, "PHASE: "); idx >= 0 {
+			if idx := strings.Index(m.Content, "PHASE: "); idx >= 0 {
 				rest := m.Content[idx+len("PHASE: "):]
 				for i, c := range rest {
 					if c == '\n' || c == '.' || c == ' ' {
@@ -85,13 +92,24 @@ func newCountingOllama(t *testing.T) *countingOllama {
 		// Security persona is used by evaluating + comparing. Both
 		// demand a structured JSON verdict.
 		if isSecurityModel(req.Model) || phase == "EVALUATION" || phase == "COMPARISON" {
-			if phase == "COMPARISON" {
-				content = `{"winner":"new","confidence":0.9,"reasons":["new candidate passes all criteria"],"missing_requirements":[]}`
-			} else {
-				// evaluating
-				content = `{"passed":true,"score":0.9,"failed_tests":[],"missing_criteria":[],"security_issues":[],"style_issues":[],"better_than_previous":true,"confidence":0.9,"summary":"candidate meets all criteria"}`
+			switch phase {
+			case "EVALUATION":
+				if len(o.evalVerdicts) > 0 {
+					content = o.evalVerdicts[0]
+					o.evalVerdicts = o.evalVerdicts[1:]
+				} else {
+					content = `{"passed":true,"score":0.9,"failed_tests":[],"missing_criteria":[],"security_issues":[],"style_issues":[],"better_than_previous":true,"confidence":0.9,"summary":"candidate meets all criteria"}`
+				}
+			case "COMPARISON":
+				if len(o.comparisonVerdicts) > 0 {
+					content = o.comparisonVerdicts[0]
+					o.comparisonVerdicts = o.comparisonVerdicts[1:]
+				} else {
+					content = `{"winner":"new","confidence":0.9,"reasons":["new candidate passes all criteria"],"missing_requirements":[]}`
+				}
 			}
 		}
+		o.mu.Unlock()
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"message":           map[string]string{"role": "assistant", "content": content},
@@ -113,16 +131,6 @@ func newCountingOllama(t *testing.T) *countingOllama {
 // JSON. The phase detection above is the actual trigger.
 func isSecurityModel(model string) bool {
 	return strings.Contains(strings.ToLower(model), "security")
-}
-
-// indexOf is a tiny shim for finding substrings in test prompts.
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 type testEnv struct {
@@ -214,8 +222,18 @@ func (e *testEnv) submitCode(t *testing.T) (jobID string) {
 // engine tests actually care about.
 func (e *testEnv) submitArchetype(t *testing.T, archetype, goal string) (jobID string) {
 	t.Helper()
+	_, _, jobID = e.createProjectTask(t, archetype, goal)
+	return jobID
+}
+
+// createProjectTask creates one project + task + job and returns
+// all three IDs. M3-T1 tests need the project and task IDs
+// (e.g. to seed a previous accepted artifact) which the slim
+// submit/submitCode helpers don't expose.
+func (e *testEnv) createProjectTask(t *testing.T, archetype, goal string) (projectID, taskID, jobID string) {
+	t.Helper()
 	submitSeq++
-	_, task, err := e.projects.Create(context.Background(),
+	p, task, err := e.projects.Create(context.Background(),
 		fmt.Sprintf("demo-%s-%d", archetype, submitSeq), archetype, goal, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +242,7 @@ func (e *testEnv) submitArchetype(t *testing.T, archetype, goal string) (jobID s
 	if err != nil {
 		t.Fatal(err)
 	}
-	return j.ID
+	return p.ID, task.ID, j.ID
 }
 
 // TestRunCompletesFullChain drives a job synchronously to completion.

@@ -37,6 +37,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -272,8 +273,13 @@ func (e *Engine) Run(ctx context.Context, jobID string) {
 			return
 		}
 		// A successful step is a successful resume (§8.3: the recovery
-		// flag clears once the job makes progress again).
-		if j.RecoveryFlag != "" {
+		// flag clears once the job makes progress again). The reflection
+		// counter co-opts the recovery_flag column with a "reflect-N"
+		// prefix (M3-T1 simplification; M3-T4 will move it to
+		// system_state); we must NOT clear that, or the budget
+		// would reset to 0 on every successful step and the budget
+		// check would never fire.
+		if j.RecoveryFlag != "" && !strings.HasPrefix(j.RecoveryFlag, "reflect-") {
 			_ = e.jobs.SetRecoveryFlag(ctx, jobID, "")
 		}
 	}

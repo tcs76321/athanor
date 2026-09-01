@@ -54,11 +54,47 @@ func (e *Engine) phaseEvaluate(ctx context.Context, j job.Job) error {
 		return err
 	}
 
-	candidates, err := e.listCandidateArtifacts(ctx, j)
+	allCandidates, err := e.listCandidateArtifacts(ctx, j)
 	if err != nil {
 		return fmt.Errorf("listing candidates: %w", err)
 	}
-	if len(candidates) == 0 {
+	// Idempotency: a candidate that already has an EvaluationRecord
+	// for this job was evaluated on a previous divergence cycle. The
+	// reflection loop re-enters `diverging` and produces a new
+	// generation of proposals, so on the second `phaseEvaluate` we
+	// must not re-evaluate the old set — doing so would (a) waste
+	// LLM calls, (b) re-bump the existing EvaluationRecord audit
+	// rows, and (c) make the test-time verdict queue impossible to
+	// size. We filter to "unevaluated" proposals and treat
+	// "all-already-evaluated" as a 0-pass cycle (which routes
+	// correctly to `reflecting` via the passCount == 0 branch
+	// below, so a re-entry where divergence produced no new
+	// proposals still hits the reflection path instead of silently
+	// re-completing).
+	existing, err := e.eval.ListByJob(ctx, j.ID)
+	if err != nil {
+		return fmt.Errorf("listing existing evaluation records: %w", err)
+	}
+	evaluated := make(map[string]struct{}, len(existing))
+	for _, r := range existing {
+		evaluated[r.ArtifactID] = struct{}{}
+	}
+	var candidates []artifact.Artifact
+	for _, c := range allCandidates {
+		if _, seen := evaluated[c.ID]; !seen {
+			candidates = append(candidates, c)
+		}
+	}
+	// `candidates` is the *unevaluated* subset. If it is empty AND
+	// `allCandidates` is also empty, divergence truly produced
+	// nothing — hard fail. If `candidates` is empty but
+	// `allCandidates` is not, every proposal was already evaluated
+	// in a prior cycle; the reflection path will re-check the
+	// budget and either re-diverge (within budget) or fail (over
+	// budget). This branch replaces the M3-T1 simplification that
+	// would otherwise fail the job on the second `phaseEvaluate`
+	// after a reflection loop.
+	if len(candidates) == 0 && len(allCandidates) == 0 {
 		// No candidates landed: divergence produced nothing. This is
 		// a hard failure (the engine cannot evaluate a void).
 		e.audit(ctx, j.ID, map[string]any{

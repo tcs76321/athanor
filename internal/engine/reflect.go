@@ -39,13 +39,19 @@ func (e *Engine) phaseReflect(ctx context.Context, j job.Job) error {
 		return err
 	}
 
-	// The reflection counter lives on the Job's `attempt` column
-	// (already part of the schema per migration 0004). For M3-T1
-	// we read it via the recovery flag — the engine stores the
-	// iteration count in the recovery_flag column as a small
-	// integer string. M3-T4 will move this to system_state with
-	// a proper typed counter.
-	iter := currentReflectionIteration(j)
+	// The reflection counter lives on the Job's recovery_flag
+	// column (co-opted for M3-T1; M3-T4 will move this to a
+	// typed counter in system_state). We re-fetch the job here
+	// because the `j` parameter carries the snapshot taken at
+	// the top of the Run loop, which is stale: the previous
+	// reflection iteration set the flag *after* the most recent
+	// `Get`, so the in-memory `j.RecoveryFlag` is one iteration
+	// behind the DB's value.
+	fresh, fetchErr := e.jobs.Get(ctx, j.ID)
+	if fetchErr != nil {
+		return fmt.Errorf("re-fetching job for reflection counter: %w", fetchErr)
+	}
+	iter := currentReflectionIteration(fresh)
 	if iter >= maxReflectionIterations {
 		e.audit(ctx, j.ID, map[string]any{
 			"event":     "reflection_budget_exhausted",
@@ -78,9 +84,25 @@ func (e *Engine) phaseReflect(ctx context.Context, j job.Job) error {
 	})
 
 	// Bump the iteration counter via the recovery flag channel.
-	// (Same simplification as the read side.)
-	if err := e.jobs.SetRecoveryFlag(ctx, j.ID, fmt.Sprintf("reflect-%d", iter+1)); err != nil {
+	// (Same simplification as the read side.) The check below
+	// enforces the budget BEFORE re-entering divergence: if the
+	// upcoming iteration would exceed `maxReflectionIterations`,
+	// we transition to `failed` now rather than waste another
+	// divergence + evaluation cycle that we already know will not
+	// count toward a passing job.
+	nextIter := iter + 1
+	if err := e.jobs.SetRecoveryFlag(ctx, j.ID, fmt.Sprintf("reflect-%d", nextIter)); err != nil {
 		slog.Warn("engine: bumping reflection counter", "err", err)
+	}
+	if nextIter >= maxReflectionIterations {
+		e.audit(ctx, j.ID, map[string]any{
+			"event":     "reflection_budget_exhausted",
+			"iter":      nextIter,
+			"max":       maxReflectionIterations,
+			"archetype": p.Archetype,
+		})
+		_, err = e.jobs.Transition(ctx, j.ID, job.StateFailed)
+		return err
 	}
 
 	_, err = e.jobs.Transition(ctx, j.ID, job.StateDiverging)

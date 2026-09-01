@@ -24,12 +24,15 @@ import (
 // config-level default (config.job_pod.default_tools).
 type Tool string
 
-// The closed set as of M2-T4. New entries require updating the
-// test in allowlist_test.go and a Gate G2 extension that asserts
-// the matching internal API route is registered.
+// The closed set as of M3-T2 commit 2.3. M2-T4 shipped the first
+// two (`execute_code`, `run_tests`); commit 2.3 adds `lint` for
+// the per-task linter. New entries require updating the test in
+// allowlist_test.go and a Gate G2 extension that asserts the
+// matching internal API route is registered.
 const (
 	ToolExecuteCode Tool = "execute_code"
 	ToolRunTests    Tool = "run_tests"
+	ToolLint        Tool = "lint"
 )
 
 // ErrUnknownTool is returned by Parse for any name outside the
@@ -115,7 +118,7 @@ func (e Envelope) IsEmpty() bool { return len(e.tools) == 0 }
 // envelope.
 func isKnown(t Tool) bool {
 	switch t {
-	case ToolExecuteCode, ToolRunTests:
+	case ToolExecuteCode, ToolRunTests, ToolLint:
 		return true
 	default:
 		return false

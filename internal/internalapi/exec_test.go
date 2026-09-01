@@ -223,3 +223,131 @@ func TestRunTests_RejectsMissingCommand(t *testing.T) {
 		t.Errorf("status = %d, want 400 (missing command)", w.Code)
 	}
 }
+
+// TestLint_RejectsWithoutToken proves the auth middleware
+// wraps the new /lint route (Gate G2's structural check
+// has a matching behavioral test, identical to the
+// execute_code / run_tests counterparts).
+func TestLint_RejectsWithoutToken(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	_, taskID := env.seedProject(t)
+
+	req := httptest.NewRequest("POST", "/internal/v1/jobs/"+taskID+"/lint",
+		bytes.NewReader([]byte(`{"command":"ruff check ."}`)))
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (no bearer)", w.Code)
+	}
+}
+
+// TestLint_RejectsWhenToolNotInEnvelope is the lint
+// counterpart of TestExecuteCode_RejectsWhenToolNotInEnvelope.
+// A request for `lint` when the envelope grants only
+// `run_tests` is rejected with 403.
+func TestLint_RejectsWhenToolNotInEnvelope(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	_, taskID := env.seedProject(t)
+	env.tokens.WithToken(taskID, goodToken)
+	// Default envelope is empty, so lint is disallowed.
+
+	body, _ := json.Marshal(lintRequest{Command: "ruff check ."})
+	req := httptest.NewRequest("POST", "/internal/v1/jobs/"+taskID+"/lint", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+goodToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body = %s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte(ErrToolDisallowed.Error())) {
+		t.Errorf("body = %q, want it to contain ErrToolDisallowed text", w.Body.String())
+	}
+	events, err := env.store.QueryEvents(context.Background(), store.EventFilter{JobID: taskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejections := 0
+	for _, e := range events {
+		var d struct {
+			Event string `json:"event"`
+			Tool  string `json:"tool"`
+		}
+		_ = json.Unmarshal([]byte(e.DataJSON), &d)
+		if d.Event == "tool_disallowed" && d.Tool == string(toolenvelope.ToolLint) {
+			rejections++
+		}
+	}
+	if rejections != 1 {
+		t.Errorf("tool_disallowed events = %d, want 1", rejections)
+	}
+}
+
+// TestLint_PassesEnvelopeCheck_Returns501 mirrors the
+// execute_code / run_tests counterpart: the structural
+// pieces (auth + envelope + audit tool_call) all pass, the
+// handler reaches its 501 "not yet implemented" placeholder.
+// The actual linter dispatch (running `ruff` in a Job Pod)
+// lands in a follow-up commit.
+func TestLint_PassesEnvelopeCheck_Returns501(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	_, taskID := env.seedProject(t)
+	env.tokens.WithToken(taskID, goodToken)
+	env.tools.WithAllow(taskID, mustParseTools(t, "lint"))
+
+	body, _ := json.Marshal(lintRequest{Command: "ruff check ."})
+	req := httptest.NewRequest("POST", "/internal/v1/jobs/"+taskID+"/lint", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+goodToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501; body = %s", w.Code, w.Body.String())
+	}
+}
+
+// TestLint_DefaultCommand fills in `ruff check .` when the
+// request body omits `command`. The handler's contract is
+// "command is optional; the default is the closed-set
+// linter." The 501 still fires; the test asserts the audit
+// event recorded the default.
+func TestLint_DefaultCommand(t *testing.T) {
+	env := newHandlerTestEnv(t)
+	_, taskID := env.seedProject(t)
+	env.tokens.WithToken(taskID, goodToken)
+	env.tools.WithAllow(taskID, mustParseTools(t, "lint"))
+
+	req := httptest.NewRequest("POST", "/internal/v1/jobs/"+taskID+"/lint",
+		bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Authorization", "Bearer "+goodToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501; body = %s", w.Code, w.Body.String())
+	}
+	events, err := env.store.QueryEvents(context.Background(), store.EventFilter{JobID: taskID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundDefault := false
+	for _, e := range events {
+		var d struct {
+			Event  string `json:"event"`
+			Tool   string `json:"tool"`
+			Detail string `json:"detail"`
+		}
+		_ = json.Unmarshal([]byte(e.DataJSON), &d)
+		if d.Event == "tool_call" && d.Tool == string(toolenvelope.ToolLint) &&
+			d.Detail == "command=ruff check ." {
+			foundDefault = true
+		}
+	}
+	if !foundDefault {
+		t.Errorf("expected a tool_call event for lint with default command %q; got %d events", allowedLintCommand, len(events))
+	}
+}

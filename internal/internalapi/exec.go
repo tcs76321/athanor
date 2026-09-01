@@ -29,6 +29,22 @@ type runTestsRequest struct {
 	Timeout int    `json:"timeout_seconds"`
 }
 
+// lintRequest is the body of POST /internal/v1/jobs/{id}/lint.
+// M3-T2 commit 2.3: the per-task linter. Default command is
+// `ruff check .` for Python projects; a future per-task
+// override arrives with the Skills runtime (post-M7).
+type lintRequest struct {
+	Command string `json:"command"`
+	Timeout int    `json:"timeout_seconds"`
+}
+
+// allowedLintCommand is the closed-set default for the lint
+// route when the request body omits a `command`. Future
+// overrides (per-task linter config) will be merged in the
+// same way the per-task `allowed_tools_json` override works
+// for the envelope.
+const allowedLintCommand = "ruff check ."
+
 // handleExecuteCode is the M2-T4 /execute_code route. Steps:
 //  1. Parse body (400 on bad JSON or missing Code).
 //  2. Validate Language against the closed set (400).
@@ -135,6 +151,57 @@ func (a *API) handleRunTests(w http.ResponseWriter, r *http.Request) {
 
 	a.auditAllow(r.Context(), jobID, toolenvelope.ToolRunTests, "command="+req.Command)
 	writeError(w, http.StatusNotImplemented, "run_tests dispatch lands in M2-T4 commit 4 (runner package)")
+}
+
+// handleLint is the M3-T2 commit 2.3 /lint route. Mirrors
+// handleExecuteCode and handleRunTests with the lint body
+// shape (command + timeout_seconds). The envelope check
+// uses the same `a.tools.EnvelopeFor` path; Gate G2's
+// TestGateG2ToolEnvelopeBypassImpossible already iterates
+// over the closed set and will pick up `lint` once it's
+// added to the slice below.
+//
+// As with the M2-T4 handlers, the actual linter dispatch
+// (running `ruff` in a Job Pod) lands in a follow-up
+// commit; this commit ships the envelope + audit + 501.
+func (a *API) handleLint(w http.ResponseWriter, r *http.Request) {
+	jobID := jobIDFromContext(r.Context())
+	if jobID == "" {
+		writeError(w, http.StatusUnauthorized, "missing authenticated job id")
+		return
+	}
+	var req lintRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if req.Command == "" {
+		req.Command = allowedLintCommand
+	}
+
+	if a.tools == nil {
+		a.auditReject(r.Context(), jobID, toolenvelope.ToolLint, "no envelope lookup configured")
+		writeError(w, http.StatusServiceUnavailable, "tool envelope lookup not configured")
+		return
+	}
+	env, err := a.tools.EnvelopeFor(r.Context(), jobID, a.defaultEnvelope)
+	if err != nil {
+		if errors.Is(err, toolenvelope.ErrUnknownTool) {
+			a.auditReject(r.Context(), jobID, toolenvelope.ToolLint, err.Error())
+			writeError(w, http.StatusInternalServerError, "task has invalid tool allowlist: "+err.Error())
+			return
+		}
+		a.auditReject(r.Context(), jobID, toolenvelope.ToolLint, err.Error())
+		writeError(w, http.StatusInternalServerError, "envelope lookup failed: "+err.Error())
+		return
+	}
+	if !env.Allows(toolenvelope.ToolLint) {
+		a.auditReject(r.Context(), jobID, toolenvelope.ToolLint, "tool not in job envelope")
+		writeError(w, http.StatusForbidden, ErrToolDisallowed.Error())
+		return
+	}
+
+	a.auditAllow(r.Context(), jobID, toolenvelope.ToolLint, "command="+req.Command)
+	writeError(w, http.StatusNotImplemented, "lint dispatch lands in a follow-up commit (M3-T2 commit 2.3 ships the envelope + audit)")
 }
 
 // auditReject records a rejected tool call in the EventLog. The

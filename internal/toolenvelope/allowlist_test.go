@@ -19,8 +19,10 @@ func TestParse_KnownTools(t *testing.T) {
 		{"empty slice", []string{}, nil},
 		{"execute_code only", []string{"execute_code"}, []Tool{ToolExecuteCode}},
 		{"run_tests only", []string{"run_tests"}, []Tool{ToolRunTests}},
+		{"lint only", []string{"lint"}, []Tool{ToolLint}},
+		{"all three, order-insensitive", []string{"run_tests", "lint", "execute_code"}, []Tool{ToolExecuteCode, ToolLint, ToolRunTests}},
 		{"both, order-insensitive", []string{"run_tests", "execute_code"}, []Tool{ToolExecuteCode, ToolRunTests}},
-		{"duplicates deduped", []string{"execute_code", "execute_code", "run_tests"}, []Tool{ToolExecuteCode, ToolRunTests}},
+		{"duplicates deduped", []string{"execute_code", "execute_code", "run_tests", "lint"}, []Tool{ToolExecuteCode, ToolLint, ToolRunTests}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,7 +47,7 @@ func TestParse_KnownTools(t *testing.T) {
 				}
 			}
 			// Tools NOT in the envelope are rejected.
-			for _, missing := range []Tool{ToolExecuteCode, ToolRunTests} {
+			for _, missing := range []Tool{ToolExecuteCode, ToolRunTests, ToolLint} {
 				isIn := false
 				for _, in := range tc.want {
 					if in == missing {
@@ -93,6 +95,9 @@ func TestEnvelope_ZeroValueIsEmpty(t *testing.T) {
 	if env.Allows(ToolRunTests) {
 		t.Errorf("zero Envelope Allows(run_tests) = true, want false")
 	}
+	if env.Allows(ToolLint) {
+		t.Errorf("zero Envelope Allows(lint) = true, want false")
+	}
 	got := env.Tools()
 	if len(got) != 0 {
 		t.Errorf("zero Envelope Tools() = %v, want empty", got)
@@ -102,12 +107,12 @@ func TestEnvelope_ZeroValueIsEmpty(t *testing.T) {
 // TestTools_SortedDeterministic proves Tools() returns a stable
 // ordering so EventLog events and audit dumps are diffable.
 func TestTools_SortedDeterministic(t *testing.T) {
-	env, err := Parse([]string{"run_tests", "execute_code"})
+	env, err := Parse([]string{"run_tests", "execute_code", "lint"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := env.Tools()
-	want := []Tool{ToolExecuteCode, ToolRunTests}
+	want := []Tool{ToolExecuteCode, ToolLint, ToolRunTests}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Tools() = %v, want %v (sorted by string value)", got, want)
 	}

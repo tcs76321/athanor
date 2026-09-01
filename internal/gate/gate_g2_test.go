@@ -186,7 +186,7 @@ func TestGateG2ToolEnvelopeBypassImpossible(t *testing.T) {
 	// We walk the package to find every .go file that contains a
 	// tool name from the closed set and assert that file
 	// references a.tools.EnvelopeFor.
-	toolNames := []string{"execute_code", "run_tests"}
+	toolNames := []string{"execute_code", "run_tests", "lint"}
 	for _, name := range toolNames {
 		path, content, ok := findFileContaining(internalapiDir, name)
 		if !ok {

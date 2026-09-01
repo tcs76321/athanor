@@ -212,4 +212,6 @@ func (a *API) Register(mux *http.ServeMux) {
 		authMiddleware(a.tokens, http.HandlerFunc(a.handleExecuteCode)))
 	mux.Handle("POST /internal/v1/jobs/{id}/run_tests",
 		authMiddleware(a.tokens, http.HandlerFunc(a.handleRunTests)))
+	mux.Handle("POST /internal/v1/jobs/{id}/lint",
+		authMiddleware(a.tokens, http.HandlerFunc(a.handleLint)))
 }

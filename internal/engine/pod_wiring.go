@@ -160,9 +160,9 @@ func (e *Engine) runTestsInPod(ctx context.Context, j job.Job, p project.Project
 // ExecuteResult shape gains a field, this function must be
 // updated.
 func jsonMarshalExecuteResult(r toolenvelope.ExecuteResult) []byte {
-	return []byte(fmt.Sprintf(
+	return fmt.Appendf(nil, 
 		`{"exit_code":%d,"stdout":%s,"stderr":%s,"duration_ms":%d}`,
-		r.ExitCode, jsonString(r.Stdout), jsonString(r.Stderr), r.DurationMS))
+		r.ExitCode, jsonString(r.Stdout), jsonString(r.Stderr), r.DurationMS)
 }
 
 // jsonString returns a JSON string literal (including the

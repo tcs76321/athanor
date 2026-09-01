@@ -10,6 +10,87 @@ New entries are appended at the top. Do not rewrite history.
 
 ## Unreleased
 
+### M3 — Dialectical Loop v1 (started)
+
+- **M3-T1 (close-out, `62ae865`).** Four follow-up fixes landed
+  after the M3-T1 phase executor was merged: (1) `phaseReflect`
+  re-fetches the Job before reading the reflection counter — the
+  `j` parameter passed to phase handlers is a snapshot taken at the
+  top of the `Run` loop, so the in-memory `RecoveryFlag` lags the
+  DB by one iteration; (2) `engine.Run` no longer clears
+  `RecoveryFlag` values prefixed with `"reflect-"`, so the reflection
+  counter survives between `Run` iterations (otherwise the counter
+  resets to 0 after every successful step and the budget check
+  never fires); (3) `phaseEvaluate` is now idempotent — candidates
+  that already have an `EvaluationRecord` for this job are skipped,
+  preventing re-evaluation of past cycles' proposals and making
+  the test-time verdict queue sized correctly; (4) `phaseReflect`
+  enforces the budget *after* bumping the counter but *before*
+  re-entering `diverging`, so the budget check fires immediately
+  on the last allowed iteration rather than wasting a divergence +
+  evaluation cycle. The E1/E2/E4/E5 dialectical-loop test suite
+  (`internal/engine/multicandidate_test.go`) lands with the fix:
+  3-candidate happy path, all-fail reflection budget exhaustion,
+  §19.3 comparison downgrade to `previous`, and the
+  no-passing-candidate `failed` path. All assertions exercise
+  `phaseCalls()` to prove the per-phase LLM call count, proving
+  the §8.2 state machine structure rather than just the end
+  state. Reference run on macOS 14, fake Ollama, `make check`:
+  `golangci-lint` 0 issues, `go vet` clean, `go test -race ./...`
+  all green, Gate G1 (`internal/gate/gate_test.go`) and Gate G2
+  (`internal/gate/gate_g2_test.go`) both pass.
+- **M3-T1 (`9cb4ccd`).** Full §8 phase executor in
+  `internal/engine`. Six phases wired to the §13.1 Dialectical
+  Loop: `phasePlan` (tall persona, temp 0.2), `phaseDivergeN`
+  (main, temp 0.7–1.1, N candidates per `cfg.Execution.
+  DivergenceCandidates`), `phaseEvaluate` (security, temp 0.0,
+  per-candidate `EvaluationRecord` persistence), `phaseReflect`
+  (main, temp 0.6–0.8, budgeted retry), `phaseSynthesize` (main,
+  temp 0.2, with the M2-T4 `code` archetype sub-steps), and
+  `phaseCompare` (security, temp 0.0, with the §19.3 deterministic
+  guard downgrading an LLM `winner: new` verdict when no
+  `EvaluationRecord` has `better_than_previous: true` with
+  confidence > `min_judge_confidence`). Each phase persists its
+  transition before the next runs (§8.2). The recovery-flag
+  counter for reflection is co-opted on `RecoveryFlag` with a
+  `"reflect-N"` prefix; M3-T4 will move it to a typed counter in
+  `system_state` (per the comment in `internal/engine/reflect.go`).
+  Tests: `internal/engine/engine_test.go` (M1 path still
+  green) and `internal/artifact/store_test.go` (new
+  `LatestAcceptedByProject` query for §19.3).
+- **M3-T1 (`9e99e20`).** `EvaluationRecord` schema and repository.
+  New table `evaluation_records` (migration 0007) with the
+  §19.2 field set: artifact_id, compared_against, score,
+  passed_tests, failed_tests (JSON list), missing_criteria (JSON
+  list), security_issues (JSON list), style_issues (JSON list),
+  better_than_previous, confidence, summary, created_at. The
+  repository (`internal/evaluation/repo.go`) writes the row and
+  the audit `events` row in one transaction so a crash between
+  data and audit cannot leave a record without its footprint
+  (mirrors the §8.2 transition pattern and the
+  `artifact.NewVersion` pattern). List-by-job ordering is
+  deterministic (created_at ASC, id ASC tiebreaker). The package
+  imports only `store` and `ids` — no engine, job, artifact, or
+  project dependency, so it cannot form an import cycle and a
+  unit test can exercise it without booting any other package.
+  Tests: `internal/evaluation/repo_test.go` (Create, Get,
+  ListByJobOrdering, ListByJob across multiple jobs).
+- **M3-T1 (`c73a115`).** Full §8.1 state machine and transition
+  table. The 13 §8.1 job states are all accepted by the schema
+  (migration 0004 was the CHECK constraint; this commit
+  wires the Go-side `CanTransition` table to match). The engine
+  dispatches every state to a dedicated phase handler in
+  `phases.go`; every transition is committed before the next
+  phase runs (§8.2 crash safety). The phase graph is now:
+  `queued → context_building → planning → diverging (N) →
+  evaluating → [reflecting ↔ diverging]* → synthesizing →
+  comparing → completed | failed`, with the `paused` terminal
+  for §22 kill-switch and `awaiting_approval` (M6) reachable
+  from `comparing`. `internal/job/state_test.go` covers the
+  full transition table (legal moves accepted, illegal moves
+  rejected). `internal/engine/recovery_test.go` proves a
+  kill-mid-phase resumes from the last committed state.
+
 ### M2 — Container Spine (continuing)
 
 - **M2-T6.** Security test suite closes Gate G2. Two layers: a

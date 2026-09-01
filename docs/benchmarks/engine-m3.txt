@@ -1,0 +1,92 @@
+# Engine Throughput Baseline — M3
+
+**Captured:** 2026-09-01 (M3-T1 close-out, commit `62ae865`)
+**Hardware:** Apple M2 Max (darwin/arm64, 12 cores visible to Go runtime)
+**Backend:** `mattn/go-sqlite3`, WAL, single connection (per ADR-0003/0004)
+**Ollama:** fake (no network, immediate response)
+**Compares to:** [engine-m1.txt](engine-m1.txt) (2.32 ms/op, 2026-08-27)
+
+## Benchmark: BenchmarkRunFullChain
+
+Runs the full M3 phase chain end-to-end through the engine with a
+fake Ollama that responds immediately. Measures the engine's
+per-phase overhead (DB writes, prompt assembly, state transitions,
+EvaluationRecord persistence) plus the Enqueue poll — not LLM
+latency.
+
+The M3 chain is the §13.1 Dialectical Loop with N=3 candidates
+(the default `cfg.Execution.DivergenceCandidates`):
+
+- 1× planning
+- 3× diverging (one per candidate)
+- 3× evaluating (one per candidate, with EvaluationRecord.Create)
+- 1× synthesizing (main persona refines the proposal into the
+  final artifact)
+- 1× comparing (security persona, §19.3 deterministic guard)
+
+Total: **9 LLM calls per job**, 6 state transitions, 3
+`EvaluationRecord.Create` transactions (one per candidate).
+
+### Results
+
+```
+goos: darwin
+goarch: arm64
+cpu: Apple M2 Max
+pkg: github.com/tcs76321/athanor/internal/engine
+BenchmarkRunFullChain-12     10    4507333 ns/op
+```
+
+**Per-job wall time:** ~4.51 ms (excluding LLM latency).
+**Per-job LLM calls:** 9 (plan + 3×div + 3×eval + synth + compare).
+**Per-job state transitions:** 6 (queued → context_building →
+planning → diverging → evaluating → synthesizing → comparing →
+completed).
+**Per-job EvaluationRecord writes:** 3 (one per candidate,
+paired with one `events` audit row each, all in a single tx).
+
+### Comparison to M1 baseline
+
+| Metric | M1 (2026-08-27) | M3 (2026-09-01) | Ratio |
+|---|---|---|---|
+| Per-job wall time | 2.32 ms | 4.51 ms | **1.94×** |
+| LLM calls per job | 3 | 9 | 3.00× |
+| State transitions per job | 6 | 6 | 1.00× |
+| EvaluationRecord writes per job | 0 | 3 | n/a (new) |
+
+The 1.94× wall-time cost is the lower bound the M1 baseline
+expected (N=3 candidates × per-phase cost). The 3× LLM call
+count is exactly the M3 multi-candidate expansion. Per-phase
+overhead is dominated by the LLM-call bookkeeping in
+`engine.call` (prompt assembly, feasibility check, token-accounting
+audit) and the `EvaluationRecord.Create` transaction; both are
+in the "acceptable" zone per the M1 expectation that "M3 should
+be slower per job (N candidates per phase) but the per-phase
+cost should remain in the same order of magnitude; if it isn't,
+the per-phase overhead has regressed somewhere." Per-phase cost
+went from 2.32/3 = 0.77 ms to 4.51/9 = 0.50 ms, so per-phase
+overhead actually *decreased* (the artifact-persistence and
+prompt-assembly code is shared with the M1 path and was
+already efficient).
+
+### What this baseline is for
+
+The next engine-level work — M3-T2 (linter adapter + test-runner
+in the evaluating phase), M3-T3 (extract `decideWinner` as a
+pure function), M3-T4 (per-phase budgets) — will add LLM calls
+or DB transactions to the hot path. Re-running `make bench`
+after each task and comparing to this 4.51 ms/op number is the
+regression check. A > 1.5× regression on per-phase cost without
+a documented cause means a hot-path allocation slipped in (a
+`fmt.Sprintf` on the request path, a missing index, a redundant
+`ListByProject` call) and should be investigated before the
+task's `M#-T#: …` commit lands.
+
+### How to reproduce
+
+```bash
+make bench
+```
+
+Output goes to stdout; pipe through `tee docs/benchmarks/run-<date>.txt`
+if you want to keep a per-run log.

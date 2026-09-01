@@ -123,6 +123,54 @@ The close-out commit (4) is materially a bug-fix commit, not a
   (`cfg.Execution.phase_wall_time_budgets` is already in
   config) but no `context.WithTimeout` is applied yet.
 
+## Out-of-band addenda (logged after M3-T1 closed)
+
+These items surfaced from a code review of the M3-T1 close-out
+(review date 2026-09-01). They are tracked here so a future
+reader of the M3-T1 plan can see the full picture of M3-T2+
+work in one place. Each is owned by a specific task, ADR, or
+ROADMAP §7 row.
+
+- **External API `Host`-header allowlist middleware** — see
+  [ADR-0011](adr/0011-external-api-host-allowlist.md). The
+  external API at `/healthz`, `/freeze`, `/projects/...`,
+  `/jobs/...` is loopback-only on the listen side
+  (`server.LocalhostAddr`) but does not validate the `Host`
+  header, leaving a (theoretical, browser-mediated) DNS-rebinding
+  vector. ADR-0011 records the design; the implementation is a
+  small `internal/server/middleware.go` plus a config block.
+  M3-T2.1 or a post-M3-T2 follow-up. ROADMAP §7 row.
+- **`format: "json"` for the security persona + parser
+  consolidation** — see
+  [ADR-0012](adr/0012-llm-format-json.md). Ollama's
+  `format=json` wire parameter constrains the verdict response
+  to valid JSON, removing the need for the brace-scan parsers in
+  `evaluate.go:269–324` and `compare.go:211–268`. The two
+  near-clone parsers collapse into a single generic helper.
+  Lands in M3-T2. ROADMAP §7 row.
+- **Comparison content limit is config-driven; prompt
+  discloses the full size** — see
+  [ADR-0013](adr/0013-comparison-content-limit.md). The 4 KB
+  hard-coded limit and the generic "truncated to 4 KB" label
+  leave the §19.3 confidence score uncalibrated. A
+  `ComparisonContentLimit` config field, a renamed
+  `readArtifactContentForComparison` helper, and a new
+  "showing first N of M bytes" prompt fix this. Lands in
+  M3-T2. ROADMAP §7 row.
+- **Drop the M2-T4 pod sub-steps from `phaseSynthesize`** —
+  see [ADR-0014](adr/0014-evaluation-phase-move.md). The
+  `runCodeInPod` + `runTestsInPod` calls in `phaseSynthesize`
+  duplicate work already done in `phaseEvaluate` and execute
+  the candidate's code after evaluation has decided to reject
+  it. ADR-0014 moves the sub-steps and deletes the redundant
+  helper. Lands in M3-T2 commit 2.1.
+- **M3 quality-measurement backlog** — ROADMAP §7 carries
+  three new rows: M3-T7-a (candidate-diversity Jaccard on the
+  `divergence_candidate` event), M3-T7-b (judge-confidence
+  calibration study), M3-T7-c (verdict-stability study at
+  Temperature 0.0). M3-T7 is the natural home for the empirical
+  data; no code change without it.
+
 ## Risks surfaced during M3-T1
 
 - **The "winner" verdict of `comparison` is a string with three

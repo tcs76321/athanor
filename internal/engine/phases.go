@@ -153,12 +153,13 @@ func finalKindFor(archetype string) artifact.Kind {
 // proposal into the final draft artifact. Re-runs after a crash version
 // the existing artifact instead of piling up drafts.
 //
-// M2-T4: for `code` archetype, after the LLM synthesis and
-// the artifact persistence, the engine runs the M2-T4
-// sub-steps in sequence: runCodeInPod then runTestsInPod.
-// Both are sub-state (logged in the EventLog, not the
-// jobs.state column) so the §8.1 state machine is unchanged.
-// Non-code archetypes skip the sub-steps.
+// M3-T2 (ADR-0014): the M2-T4 sub-steps (`runCodeInPod` and
+// `runTestsInPod`) used to live here. They now live in
+// `phaseEvaluate.evaluateCandidate` (per candidate, before the
+// security-persona verdict) so the pod's exit code is part of the
+// evidence the LLM judge sees. This function is archetype-agnostic;
+// the per-archetype artifact kind is the only divergence
+// (`finalKindFor` below).
 func (e *Engine) phaseSynthesize(ctx context.Context, j job.Job) error {
 	p, t, err := e.contexts(ctx, j)
 	if err != nil {
@@ -187,18 +188,6 @@ func (e *Engine) phaseSynthesize(ctx context.Context, j job.Job) error {
 	} else {
 		if _, err := e.artifacts.CreateDraftFor(ctx, p.ID, t.ID, j.ID, kind, []byte(resp.Content)); err != nil {
 			return fmt.Errorf("persisting final artifact: %w", err)
-		}
-	}
-
-	// M2-T4 sub-steps: only the code archetype runs them.
-	// Other archetypes (text, document, data, media) skip
-	// straight to comparing, exactly as M1 did.
-	if p.Archetype == project.ArchetypeCode {
-		if err := e.runCodeInPod(ctx, j, p, t); err != nil {
-			return err
-		}
-		if err := e.runTestsInPod(ctx, j, p, t); err != nil {
-			return err
 		}
 	}
 

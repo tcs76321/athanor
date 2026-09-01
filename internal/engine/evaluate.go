@@ -173,6 +173,15 @@ func (e *Engine) evaluateCandidate(ctx context.Context, j job.Job, p project.Pro
 		failedTests  []string
 		testExitCode int
 	)
+	// M3-T2 (ADR-0014): for `code` archetype, execute the candidate's
+	// code in the Job Pod before the security-persona verdict. The
+	// `code_executed` audit event + `KindCode` artifact persistence
+	// move here from the former M2-T4 sub-step in `phaseSynthesize`.
+	if p.Archetype == project.ArchetypeCode && e.runner != nil {
+		if err := e.runCodeInPod(ctx, j, p, t); err != nil {
+			return evaluation.Record{}, err
+		}
+	}
 	if p.Archetype == project.ArchetypeCode && e.runner != nil {
 		// §8.1 "tracked sub-state": running_tests is an event, not a
 		// column. We enter and exit the substate around the

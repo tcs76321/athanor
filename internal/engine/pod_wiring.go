@@ -93,66 +93,13 @@ func (e *Engine) runCodeInPod(ctx context.Context, j job.Job, p project.Project,
 	return nil
 }
 
-// The sub-steps are intentionally a *sub-state* (logged in the
+// The sub-step is intentionally a *sub-state* (logged in the
 // EventLog, not the jobs.state column) so we do not have to
-// modify the §8.1 state machine and its tests. M3-T1 will
-// promote the sub-step to a proper `evaluating` state.
-// runTestsInPod dispatches the test command to the Job Pod's
-// run_tests route. The command is hard-coded to "pytest -q"
-// in M2-T4; the configuration knob arrives in M3.
+// modify the §8.1 state machine and its tests. M3-T2 (ADR-0014)
+// lives in `phaseEvaluate.evaluateCandidate` — the §13.1
+// Phase 3 sequence is now: per-candidate code-exec + test-run
+// + LLM verdict, all in `evaluating`.
 //
-// runTestsInPod is a no-op for non-code archetypes. Same
-// short-circuit rules as runCodeInPod: nil runner → audit
-// skip; tool-not-allowed → audit skip; real failure → job
-// failed.
-func (e *Engine) runTestsInPod(ctx context.Context, j job.Job, p project.Project, _ project.Task) error {
-	if e.runner == nil {
-		e.audit(ctx, j.ID, map[string]any{
-			"event":     "tests_run",
-			"skipped":   true,
-			"reason":    "no ToolRunner wired (M1 dev mode)",
-			"archetype": p.Archetype,
-		})
-		return nil
-	}
-
-	req := toolenvelope.ExecuteRequest{
-		Command: "pytest -q",
-	}
-	res, err := e.runner.RunTests(ctx, j.ID, req)
-	if err != nil {
-		if errors.Is(err, toolenvelope.ErrToolDisallowed) {
-			e.audit(ctx, j.ID, map[string]any{
-				"event":     "tests_run",
-				"skipped":   true,
-				"reason":    "run_tests not in job envelope",
-				"archetype": p.Archetype,
-			})
-			return nil
-		}
-		e.audit(ctx, j.ID, map[string]any{
-			"event":  "tests_run",
-			"error":  err.Error(),
-			"detail": "runner returned non-disallowed error",
-		})
-		return fmt.Errorf("running tests in pod: %w", err)
-	}
-
-	if _, err := e.artifacts.CreateDraftFor(ctx, p.ID, "", j.ID, artifact.KindCode, jsonMarshalExecuteResult(res)); err != nil {
-		return fmt.Errorf("persisting test execution artifact: %w", err)
-	}
-	e.audit(ctx, j.ID, map[string]any{
-		"event":       "tests_run",
-		"exit_code":   res.ExitCode,
-		"duration_ms": res.DurationMS,
-		"stdout_len":  len(res.Stdout),
-		"stderr_len":  len(res.Stderr),
-		"archetype":   p.Archetype,
-	})
-	slog.Debug("engine: tests run in pod", "job", j.ID, "exit_code", res.ExitCode, "duration_ms", res.DurationMS)
-	return nil
-}
-
 // jsonMarshalExecuteResult serializes an ExecuteResult to JSON
 // bytes by hand. The struct is four primitive fields; pulling
 // in encoding/json for this one callsite would inflate the

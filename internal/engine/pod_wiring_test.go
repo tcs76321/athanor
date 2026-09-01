@@ -110,30 +110,31 @@ func (f *fakeRunner) run(_ context.Context, jobID string, req toolenvelope.Execu
 	}, nil
 }
 
-// TestRun_CodeArchetypeCallsRunner is the M2-T4 behavioral
+// TestRun_CodeArchetypeCallsRunner is the M2-T4/M3-T2 behavioral
 // proof that the engine calls the ToolRunner for code-archetype
-// jobs. The text-archetype test (TestRunCompletesFullChain)
-// asserts the inverse: 3 LLM calls, 0 runner calls.
+// jobs. The text-archetype test (TestRun_TextArchetypeDoesNotCallRunner,
+// below) asserts the inverse: 0 runner calls.
 //
-// The fake runner is wired into the engine, so any HTTP-shaped
-// call the engine makes lands in the runner's call log. After
-// Run completes, the log has one RunCode call (synthesis phase) and
-// four RunTests calls: 3 from the M3-T1 evaluating phase (one per
-// candidate) and 1 from the synthesis phase.
+// M3-T2 (ADR-0014) moved both RunCode and RunTests from the
+// synthesis phase into the per-candidate `evaluating` phase.
+// After Run completes, the log has 3 RunCode calls + 3
+// RunTests calls, all in `evaluating`. `synthesizing` no longer
+// touches the runner.
 func TestRun_CodeArchetypeCallsRunner(t *testing.T) {
 	env := newEnv(t)
 	codeJobID := env.submitCode(t)
 
 	env.eng.Run(context.Background(), codeJobID)
 
-	// M3-T1: 3 candidates × RunTests (evaluating) + 1 RunCode + 1
-	// RunTests (synthesizing) = 5 runner calls.
-	if got := env.runner.CallCount(); got != 5 {
-		t.Errorf("runner calls = %d, want 5 (M3-T1: 3*evaluating RunTests + RunCode + synth RunTests)", got)
+	// M3-T2 (ADR-0014): 3 candidates × (RunCode + RunTests) in
+	// `evaluating` = 6 runner calls. `synthesizing` makes zero
+	// runner calls.
+	if got := env.runner.CallCount(); got != 6 {
+		t.Errorf("runner calls = %d, want 6 (M3-T2: 3*evaluating RunCode + 3*evaluating RunTests)", got)
 	}
 	calls := env.runner.Calls()
-	if len(calls) != 5 {
-		t.Fatalf("calls = %d, want 5", len(calls))
+	if len(calls) != 6 {
+		t.Fatalf("calls = %d, want 6", len(calls))
 	}
 	codeCount, testCount := 0, 0
 	var codeCall, testCall fakeCall
@@ -147,14 +148,14 @@ func TestRun_CodeArchetypeCallsRunner(t *testing.T) {
 			testCall = c
 		}
 	}
-	if codeCount != 1 {
-		t.Errorf("RunCode calls = %d, want 1", codeCount)
+	if codeCount != 3 {
+		t.Errorf("RunCode calls = %d, want 3 (one per candidate, all in evaluating)", codeCount)
 	}
 	if codeCall.Lang != "python" {
 		t.Errorf("RunCode language = %q, want python", codeCall.Lang)
 	}
-	if testCount != 4 {
-		t.Errorf("RunTests calls = %d, want 4 (3 evaluating + 1 synthesizing)", testCount)
+	if testCount != 3 {
+		t.Errorf("RunTests calls = %d, want 3 (one per candidate, all in evaluating)", testCount)
 	}
 	if testCall.Cmd != "pytest -q" {
 		t.Errorf("RunTests command = %q, want pytest -q", testCall.Cmd)

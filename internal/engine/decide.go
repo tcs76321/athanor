@@ -50,7 +50,11 @@ import (
 // input verdict is not mutated; a new value is returned. If
 // a downgrade happened, the new `Reasons` slice contains the
 // original reasons plus a single appended line explaining the
-// downgrade.
+// downgrade. On the no-downgrade path, the function ensures
+// `Reasons` is non-empty by appending a one-line annotation
+// so the `comparison` audit row always has something to
+// read in a post-mortem (a no-reason audit row is hard to
+// interpret when the LLM returned an empty `reasons` array).
 //
 // `threshold` is the resolved `min_judge_confidence` (the
 // caller resolves config defaults before passing; the
@@ -68,8 +72,9 @@ func DecideWinner(verdict comparisonVerdict, records []evaluation.Record, thresh
 		// Disabled: every record (if any) meets it. The
 		// LLM's verdict stands. (The disabled case is
 		// a single-record gate; the loop below is a
-		// no-op when records is empty.)
-		return verdict
+		// no-op when records is empty.) Annotate the
+		// reasons so the audit row is non-empty.
+		return withReason(verdict, "§19.3 guard disabled by config (min_judge_confidence <= 0); LLM verdict honored")
 	}
 	// §19.3: new wins ⟺ ∃ EvaluationRecord with
 	// better_than_previous AND confidence > threshold.
@@ -83,12 +88,14 @@ func DecideWinner(verdict comparisonVerdict, records []evaluation.Record, thresh
 	if verdict.Winner != "new" {
 		// The guard only blocks an unsupported "new"; it
 		// never promotes an unsupported "previous" or
-		// "none". (See package doc comment.)
-		return verdict
+		// "none". (See package doc comment.) Annotate
+		// the reasons so the audit row is non-empty.
+		return withReason(verdict, "LLM verdict is not 'new'; §19.3 guard did not modify it")
 	}
 	if strongNew {
 		// The LLM's verdict is backed by a record. Honor it.
-		return verdict
+		// Annotate the reasons so the audit row is non-empty.
+		return withReason(verdict, "§19.3 guard satisfied: at least one EvaluationRecord met better_than_previous + confidence > threshold; LLM verdict honored")
 	}
 	// Downgrade.
 	out := verdict
@@ -101,5 +108,25 @@ func DecideWinner(verdict comparisonVerdict, records []evaluation.Record, thresh
 		out.Reasons = append(out.Reasons,
 			fmt.Sprintf("downgraded from 'new' to 'none': no prior accepted artifact and no EvaluationRecord met confidence > %.2f", threshold))
 	}
+	return out
+}
+
+// withReason returns a copy of `verdict` with `reason` appended
+// to its `Reasons` slice. The copy is intentional: DecideWinner
+// is documented to never mutate its input, and the caller
+// (phaseCompare) relies on the audit row carrying the engine's
+// annotation, not the LLM's mutable input.
+//
+// A nil `Reasons` is treated as a non-nil empty slice so the
+// append works without a separate initialization step; the
+// resulting `Reasons` is always a non-nil slice (even when
+// the LLM emitted an empty `reasons` array) so the audit row
+// is readable in post-mortems.
+func withReason(verdict comparisonVerdict, reason string) comparisonVerdict {
+	out := verdict
+	if out.Reasons == nil {
+		out.Reasons = []string{}
+	}
+	out.Reasons = append(out.Reasons, reason)
 	return out
 }

@@ -325,3 +325,69 @@ func TestDecideWinner(t *testing.T) {
 		})
 	}
 }
+
+// TestDecideWinner_ReasonsAlwaysNonEmpty covers the
+// post-mortem-readability contract: regardless of which
+// branch DecideWinner takes (disabled, no-record, or
+// satisfied), the returned verdict's `Reasons` slice is
+// non-nil and has at least one entry. The audit row the
+// engine writes (`comparison` event with the
+// post-DecideWinner verdict) is then guaranteed to have
+// something to read in a post-mortem, even when the LLM
+// returned an empty `reasons` array.
+func TestDecideWinner_ReasonsAlwaysNonEmpty(t *testing.T) {
+	cases := []struct {
+		name        string
+		verdict     comparisonVerdict
+		records     []evaluation.Record
+		threshold   float64
+		hasPrevious bool
+	}{
+		{
+			name:        "disabled_threshold",
+			verdict:     verdictFor("new"),
+			threshold:   0,
+			hasPrevious: true,
+		},
+		{
+			name:        "verdict_not_new",
+			verdict:     verdictFor("previous"),
+			threshold:   0.7,
+			hasPrevious: true,
+		},
+		{
+			name: "satisfied_guard",
+			verdict: verdictFor("new"),
+			records: []evaluation.Record{
+				recordFor(true, 0.9),
+			},
+			threshold:   0.7,
+			hasPrevious: true,
+		},
+		{
+			name:        "downgraded_to_previous",
+			verdict:     verdictFor("new"),
+			records:     []evaluation.Record{recordFor(false, 0.5)},
+			threshold:   0.7,
+			hasPrevious: true,
+		},
+		{
+			name:        "downgraded_to_none",
+			verdict:     verdictFor("new"),
+			records:     []evaluation.Record{recordFor(true, 0.5)},
+			threshold:   0.7,
+			hasPrevious: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecideWinner(tc.verdict, tc.records, tc.threshold, tc.hasPrevious)
+			if got.Reasons == nil {
+				t.Errorf("Reasons is nil; want non-nil with at least one entry")
+			}
+			if len(got.Reasons) == 0 {
+				t.Errorf("Reasons is empty; want at least one entry (post-mortem readability)")
+			}
+		})
+	}
+}

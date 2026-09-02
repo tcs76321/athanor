@@ -46,6 +46,12 @@ func (e *Engine) phaseDivergeN(ctx context.Context, j job.Job) error {
 		"archetype":  p.Archetype,
 	})
 
+	// M3-T7-a: keep each candidate's text in memory so we can
+	// compute pairwise Jaccard distance after the loop. The
+	// set is bounded by `n` (default 3, hard-capped by
+	// MaxHardTaskVariations) so the memory cost is trivial.
+	candidateTexts := make([]string, 0, n)
+
 	for i := 0; i < n; i++ {
 		// The instruction appends a per-candidate seed so consecutive
 		// calls with the same prompt still produce different outputs
@@ -61,6 +67,7 @@ func (e *Engine) phaseDivergeN(ctx context.Context, j job.Job) error {
 			artifact.KindProposal, []byte(resp.Content)); err != nil {
 			return fmt.Errorf("persisting divergence candidate %d: %w", i+1, err)
 		}
+		candidateTexts = append(candidateTexts, resp.Content)
 		e.audit(ctx, j.ID, map[string]any{
 			"event": "divergence_candidate",
 			"index": i + 1,
@@ -69,6 +76,104 @@ func (e *Engine) phaseDivergeN(ctx context.Context, j job.Job) error {
 		})
 	}
 
+	// M3-T7-a: emit the average pairwise Jaccard distance
+	// across the candidate set as a `divergence_jaccard`
+	// event. The metric is the empirical case for the
+	// "is divergence doing useful work" question; a low
+	// Jaccard (<0.3) on >20% of tasks is the trigger for
+	// the re-roll policy (ROADMAP §7, M3-T7-a).
+	avgJaccard := averagePairwiseJaccard(candidateTexts)
+	e.audit(ctx, j.ID, map[string]any{
+		"event":        "divergence_jaccard",
+		"candidates":   n,
+		"avg_jaccard":  avgJaccard,
+		"archetype":    p.Archetype,
+	})
+
 	_, err = e.jobs.Transition(ctx, j.ID, job.StateEvaluating)
 	return err
+}
+
+// averagePairwiseJaccard returns the mean pairwise
+// Jaccard *distance* (1 - Jaccard similarity) across
+// all distinct pairs in `texts`. A distance of 1.0
+// means the two sets are disjoint; 0.0 means
+// identical. The function is order-insensitive
+// (average over (i, j) with i < j).
+//
+// Tokenization is whitespace + lowercase, the
+// simplest split that doesn't conflate "the" with
+// "The". For the M3-T7-a measurement this is
+// sufficient; a more sophisticated tokenizer is
+// follow-up work.
+func averagePairwiseJaccard(texts []string) float64 {
+	if len(texts) < 2 {
+		return 0
+	}
+	sets := make([]map[string]struct{}, len(texts))
+	for i, t := range texts {
+		sets[i] = tokenize(t)
+	}
+	var sum float64
+	var pairs int
+	for i := 0; i < len(texts); i++ {
+		for j := i + 1; j < len(texts); j++ {
+			sum += jaccardDistance(sets[i], sets[j])
+			pairs++
+		}
+	}
+	if pairs == 0 {
+		return 0
+	}
+	return sum / float64(pairs)
+}
+
+// tokenize returns the set of whitespace-split,
+// lowercased tokens in `s`. Empty strings and
+// strings with no tokens return an empty (not nil)
+// map so jaccardDistance handles them uniformly.
+func tokenize(s string) map[string]struct{} {
+	out := map[string]struct{}{}
+	word := make([]rune, 0, 16)
+	flush := func() {
+		if len(word) == 0 {
+			return
+		}
+		out[string(word)] = struct{}{}
+		word = word[:0]
+	}
+	for _, r := range s {
+		if r == ' ' || r == '\n' || r == '\t' || r == '\r' {
+			flush()
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		word = append(word, r)
+	}
+	flush()
+	return out
+}
+
+// jaccardDistance returns 1 - |A ∩ B| / |A ∪ B|.
+// Two empty sets have distance 0 (they are
+// identical under the Jaccard measure; a
+// divide-by-zero on |A ∪ B| is avoided by the
+// short-circuit).
+func jaccardDistance(a, b map[string]struct{}) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for k := range a {
+		if _, ok := b[k]; ok {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union == 0 {
+		return 0
+	}
+	return 1.0 - float64(inter)/float64(union)
 }

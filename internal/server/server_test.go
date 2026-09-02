@@ -7,10 +7,29 @@ import (
 	"testing"
 )
 
+// disableAllowlistForTest is a test helper that
+// clears the ADR-0011 Host-header allowlist (the
+// documented escape hatch in `SetHostAllowlist`).
+// Tests that need a running test server but are not
+// about the allowlist use this so the random
+// httptest port does not fail the middleware check.
+// The first ts is discarded and a new one started
+// with the empty allowlist (the middleware is a
+// no-op when the allowlist is empty).
+func disableAllowlistForTest(t *testing.T, srv *Server, ts *httptest.Server) *httptest.Server {
+	t.Helper()
+	if err := srv.SetHostAllowlist(nil); err != nil {
+		t.Fatal(err)
+	}
+	ts.Close()
+	ts = httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
 func TestHealthz(t *testing.T) {
 	srv := New("test-version")
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	ts := disableAllowlistForTest(t, srv, httptest.NewServer(srv.Handler()))
 
 	resp, err := http.Get(ts.URL + "/healthz")
 	if err != nil {
@@ -46,8 +65,7 @@ func TestHealthz(t *testing.T) {
 
 func TestHealthzMethodNotAllowed(t *testing.T) {
 	srv := New("test-version")
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	ts := disableAllowlistForTest(t, srv, httptest.NewServer(srv.Handler()))
 
 	resp, err := http.Post(ts.URL+"/healthz", "application/json", nil)
 	if err != nil {
@@ -64,8 +82,7 @@ func TestHealthzMethodNotAllowed(t *testing.T) {
 
 func TestUnknownRoutes404(t *testing.T) {
 	srv := New("test-version")
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	ts := disableAllowlistForTest(t, srv, httptest.NewServer(srv.Handler()))
 
 	resp, err := http.Get(ts.URL + "/nope")
 	if err != nil {

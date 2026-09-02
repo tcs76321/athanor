@@ -41,6 +41,13 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeControl) {
 	ctrl := &fakeControl{}
 	srv := New("test-version")
 	srv.SetControl(ctrl)
+	// Disable the ADR-0011 Host-header allowlist for
+	// tests that are not about the middleware. The
+	// httptest server binds a random port, which is
+	// not in the default 7420 allowlist.
+	if err := srv.SetHostAllowlist(nil); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, ctrl
@@ -142,6 +149,12 @@ func TestFreezeMethodNotAllowed(t *testing.T) {
 // frozen also cannot be driven through it.
 func TestNoControlMeansNoFreezeRoute(t *testing.T) {
 	srv := New("test-version")
+	// Disable the ADR-0011 allowlist for this test (the
+	// no-control case is about route registration, not
+	// the Host header).
+	if err := srv.SetHostAllowlist(nil); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	resp, err := http.Get(ts.URL + "/freeze")

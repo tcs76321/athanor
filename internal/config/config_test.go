@@ -69,6 +69,9 @@ func TestLoadValidMinimalAppliesDefaults(t *testing.T) {
 	if d, _ := cfg.Execution.PhaseBudget("synthesizing"); d != 300*time.Second {
 		t.Errorf("fallback budget for unknown phase = %v", d)
 	}
+	if len(cfg.Network.ExternalAPIHostAllowlist) != 4 {
+		t.Errorf("ExternalAPIHostAllowlist default = %v, want 4 entries", cfg.Network.ExternalAPIHostAllowlist)
+	}
 	if !Val(cfg.Security.ScanIngressFiles, false) || !Val(cfg.Backup.Auto, false) {
 		t.Error("default-on security/backup flags not applied")
 	}

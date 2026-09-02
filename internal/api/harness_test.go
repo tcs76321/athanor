@@ -75,6 +75,13 @@ func newHarness(t *testing.T) *harness {
 	srv := server.New("test")
 	srv.SetControl(freezer)
 	New(projects, jobs, artifacts, eng, freezer, st).Register(srv.Mux())
+	// Disable the ADR-0011 Host-header allowlist for
+	// tests that are not about the middleware. The
+	// httptest server binds a random port, which is
+	// not in the default 7420 allowlist.
+	if err := srv.SetHostAllowlist(nil); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

@@ -9,6 +9,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -87,6 +88,19 @@ func validateRaw(c *Config) error {
 	case "", "deny", "allow":
 	default:
 		return fmt.Errorf("network.default_policy must be \"deny\" or \"allow\", got %q", p)
+	}
+	// ADR-0011: the external API Host-header
+	// allowlist must contain valid "host:port"
+	// entries. Empty entries are rejected; an
+	// empty list is allowed (disables the check,
+	// documented escape hatch for tests).
+	for _, entry := range c.Network.ExternalAPIHostAllowlist {
+		if entry == "" {
+			return fmt.Errorf("network.external_api_host_allowlist contains an empty entry")
+		}
+		if _, _, err := net.SplitHostPort(entry); err != nil {
+			return fmt.Errorf("network.external_api_host_allowlist entry %q must be host:port: %w", entry, err)
+		}
 	}
 	switch lvl := c.Logging.Level; lvl {
 	case "", "debug", "info", "warn", "error":

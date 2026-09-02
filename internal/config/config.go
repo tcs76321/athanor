@@ -211,7 +211,8 @@ type Recovery struct {
 	MaxContextCompactions int `yaml:"max_context_compactions"`
 }
 
-// Network configures the Internet Gated Reader (§21.5).
+// Network configures the Internet Gated Reader (§21.5)
+// and the external API Host-header allowlist (ADR-0011).
 type Network struct {
 	DefaultPolicy               string   `yaml:"default_policy"`
 	AllowList                   []string `yaml:"allow_list"`
@@ -219,6 +220,14 @@ type Network struct {
 	MaxResponseBytes            int64    `yaml:"max_response_bytes"`
 	ReaderModeDefault           *bool    `yaml:"reader_mode_default"`
 	BrowserModeRequiresApproval *bool    `yaml:"browser_mode_requires_approval"`
+	// ExternalAPIHostAllowlist is the set of
+	// "host:port" pairs the external API accepts
+	// (ADR-0011 §D1). Requests whose Host header is
+	// not in this set are rejected with 421
+	// Misdirected Request. An empty list disables
+	// the check (a documented escape hatch for
+	// tests; never the default in production).
+	ExternalAPIHostAllowlist []string `yaml:"external_api_host_allowlist"`
 }
 
 // Security toggles airlock scanning (§21.3–21.4).

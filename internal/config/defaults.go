@@ -137,6 +137,18 @@ func applyDefaults(c *Config) {
 	}
 	setTrue(&c.Network.ReaderModeDefault)
 	setTrue(&c.Network.BrowserModeRequiresApproval)
+	// M3-T5/ADR-0011 follow-up: the external API
+	// Host-header allowlist defaults to the §D1
+	// loopback set. Empty entries are rejected by
+	// `validateRaw` (config.go).
+	if c.Network.ExternalAPIHostAllowlist == nil {
+		c.Network.ExternalAPIHostAllowlist = []string{
+			"127.0.0.1:7420",
+			"localhost:7420",
+			"[::1]:7420",
+			"athanor.local:7420",
+		}
+	}
 
 	setTrue(&c.Security.ScanIngressFiles)
 	setTrue(&c.Security.ScanEgressFiles)

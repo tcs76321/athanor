@@ -23,17 +23,52 @@ type Control interface {
 
 // Server holds daemon-wide HTTP state.
 type Server struct {
-	version string
-	started time.Time
-	control Control
-	mux     *http.ServeMux
+	version       string
+	started       time.Time
+	control       Control
+	mux           *http.ServeMux
+	hostAllowlist hostAllowlist
+}
+
+// defaultHostAllowlist is the §D1 set from ADR-0011.
+// Used by New() when SetHostAllowlist is not called
+// (the common case; tests that want to exercise the
+// allowlist bypass this constructor).
+var defaultHostAllowlist = []string{
+	"127.0.0.1:7420",
+	"localhost:7420",
+	"[::1]:7420",
+	"athanor.local:7420",
 }
 
 // New returns a Server whose uptime clock starts now.
+// The default Host-header allowlist (ADR-0011 §D1) is
+// installed; callers that need a different set use
+// SetHostAllowlist.
 func New(version string) *Server {
 	s := &Server{version: version, started: time.Now(), mux: http.NewServeMux()}
+	// newHostAllowlist on the static default list is
+	// guaranteed to succeed (the package init in
+	// middleware.go is a compile-time sanity check).
+	hl, _ := newHostAllowlist(defaultHostAllowlist)
+	s.hostAllowlist = hl
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	return s
+}
+
+// SetHostAllowlist replaces the default allowlist.
+// An empty list disables the check (documented
+// escape hatch for tests; never the default in
+// production). An invalid entry is a build-time
+// error from newHostAllowlist and bubbles up
+// here.
+func (s *Server) SetHostAllowlist(entries []string) error {
+	hl, err := newHostAllowlist(entries)
+	if err != nil {
+		return err
+	}
+	s.hostAllowlist = hl
+	return nil
 }
 
 // SetControl attaches the kill switch. Without it the control routes are
@@ -53,9 +88,16 @@ func (s *Server) Register(pattern string, h http.HandlerFunc) {
 // at once (internal/api).
 func (s *Server) Mux() *http.ServeMux { return s.mux }
 
-// Handler returns the root http.Handler with all routes attached.
+// Handler returns the root http.Handler with all routes attached. The
+// external API is wrapped in the Host-header allowlist middleware
+// (ADR-0011); the internal API is not (it has its own bearer-token
+// auth, ADR-0008). When the allowlist is empty (a test escape hatch),
+// the middleware is a no-op.
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	if len(s.hostAllowlist.allowed) == 0 {
+		return s.mux
+	}
+	return s.hostMiddleware(s.mux)
 }
 
 type healthResponse struct {

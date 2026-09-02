@@ -16,6 +16,28 @@ make run          # run the daemon locally
 
 Don't run bare `go build` / `go test` — they silently drop CGO and fail on the sqlite3 driver. The Makefile sets the flag for you, and CI enforces the same targets.
 
+### Integration (behavioral) security probes
+
+The five behavioral probes in `internal/jobpod/security_test.go`
+(network, Ollama, podman.sock, host FS, credentials) bring up real
+hardened pods and assert denial at runtime. They are gated by the
+`ATHANOR_RUN_INTEGRATION=1` env var and **never run in CI**:
+
+```bash
+ATHANOR_RUN_INTEGRATION=1 make test-integration
+```
+
+Reason: the probes require a running `podman` daemon on AppleHV
+(macOS) or an equivalent Linux runtime. CI runs Ubuntu with no
+podman runtime, so the probes are no-ops there. The structural
+argv regression test (`TestGateG2JobPodArgvCannotEscape`) and the
+LLM-isolation tests *do* run in CI — they provide the structural
+guarantee; the integration probes provide the behavioral
+double-check on a developer's machine.
+
+The reference run on 2026-08-30 (macOS 14 / podman 5.8.2 /
+applehv) passed all five probes. See [`docs/demo-m2.md`](docs/demo-m2.md).
+
 When FTS5 support is needed, add the build tag: `go build -tags sqlite_fts5 .`
 
 ## Per-phase budgets

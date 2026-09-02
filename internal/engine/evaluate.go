@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -285,60 +284,9 @@ func (e *Engine) evaluateCandidate(ctx context.Context, j job.Job, p project.Pro
 // parseEvalVerdict extracts the JSON the security persona produced.
 // A non-JSON response is a hard error — the §13.1 contract is
 // "structured JSON output," and a wandering verdict is not a verdict
-// at all.
+// at all. The brace-scan logic lives in `parseVerdictJSON`
+// (ADR-0012 follow-up); this function is a thin wrapper that
+// pins the destination type.
 func parseEvalVerdict(content string) (evalVerdict, error) {
-	var v evalVerdict
-	// Be lenient about wrapping: the LLM may emit the JSON inside
-	// a code fence or preceded by prose. Find the first '{' and
-	// the matching '}'.
-	start := -1
-	for i, c := range content {
-		if c == '{' {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return v, fmt.Errorf("no JSON object in verdict: %q", content)
-	}
-	// Track depth so an embedded '}' inside a string doesn't fool us.
-	depth, end := 0, -1
-	inStr, escape := false, false
-	for i := start; i < len(content); i++ {
-		c := content[i]
-		if escape {
-			escape = false
-			continue
-		}
-		if c == '\\' && inStr {
-			escape = true
-			continue
-		}
-		if c == '"' {
-			inStr = !inStr
-			continue
-		}
-		if inStr {
-			continue
-		}
-		switch c {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				end = i
-			}
-		}
-		if end >= 0 {
-			break
-		}
-	}
-	if end < 0 {
-		return v, fmt.Errorf("unterminated JSON object in verdict: %q", content)
-	}
-	if err := json.Unmarshal([]byte(content[start:end+1]), &v); err != nil {
-		return v, fmt.Errorf("decoding verdict JSON: %w", err)
-	}
-	return v, nil
+	return parseVerdictJSON[evalVerdict](content)
 }

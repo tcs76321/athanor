@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -308,55 +307,15 @@ func isUnknownWinnerErr(err error) bool {
 // an unknown winner is reported via errUnknownWinner
 // rather than silently downgraded to "none", so the engine
 // can audit the downgrade.
+//
+// The brace-scan logic lives in `parseVerdictJSON`
+// (ADR-0012 follow-up); this function is a thin wrapper
+// that pins the destination type, applies the §3.3
+// refinements, and returns the typed errUnknownWinner.
 func parseComparisonVerdict(content string) (comparisonVerdict, error) {
-	var v comparisonVerdict
-	start := -1
-	for i, c := range content {
-		if c == '{' {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return v, fmt.Errorf("no JSON object in comparison verdict: %q", content)
-	}
-	depth, end := 0, -1
-	inStr, escape := false, false
-	for i := start; i < len(content); i++ {
-		c := content[i]
-		if escape {
-			escape = false
-			continue
-		}
-		if c == '\\' && inStr {
-			escape = true
-			continue
-		}
-		if c == '"' {
-			inStr = !inStr
-			continue
-		}
-		if inStr {
-			continue
-		}
-		switch c {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				end = i
-			}
-		}
-		if end >= 0 {
-			break
-		}
-	}
-	if end < 0 {
-		return v, fmt.Errorf("unterminated JSON object in comparison verdict: %q", content)
-	}
-	if err := json.Unmarshal([]byte(content[start:end+1]), &v); err != nil {
-		return v, fmt.Errorf("decoding comparison verdict: %w", err)
+	v, err := parseVerdictJSON[comparisonVerdict](content)
+	if err != nil {
+		return v, err
 	}
 	// M3-T3 commit 3.3: trim whitespace before the
 	// closed-set check. The M3-T1 carry-over polish item

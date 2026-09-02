@@ -190,3 +190,38 @@ func (r *Repo) Get(ctx context.Context, id string) (Record, error) {
 	}
 	return rec, err
 }
+
+// ListByArtifact returns the records whose `artifact_id` matches
+// the given artifact, in creation order (oldest first). M3-T3
+// commit 3.1 uses this to load the previous accepted artifact's
+// evaluation history for the comparison prompt's "Previous-record
+// summary" section.
+//
+// Records here describe the artifact *as a candidate* — what the
+// security persona said about it at the time it was the
+// diverging phase's output. The records that *compared against*
+// the same artifact (where the artifact is the `compared_against`
+// field) live in a different query (not exposed yet; M3-T7 may
+// add it).
+func (r *Repo) ListByArtifact(ctx context.Context, artifactID string) ([]Record, error) {
+	rows, err := r.db.DB().QueryContext(ctx,
+		`SELECT `+recordColumns+` FROM evaluation_records
+		 WHERE artifact_id = ? ORDER BY created_at ASC, id ASC`, artifactID)
+	if err != nil {
+		return nil, fmt.Errorf("evaluation: listing records by artifact: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Record
+	for rows.Next() {
+		rec, err := scanRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("evaluation: scanning record: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("evaluation: iterating records: %w", err)
+	}
+	return out, nil
+}

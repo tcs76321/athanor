@@ -74,19 +74,54 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 		return errors.New("phaseCompare: no evaluation records persisted for this job")
 	}
 
-	// Previous-side context: the project's last accepted artifact.
+	// Previous-side context: the project's last accepted artifact,
+	// plus its evaluation history. M3-T3 commit 3.1 adds the
+	// "Previous-record summary" section to the comparison prompt
+	// so the LLM judge can reason about how the previous scored
+	// when it was a candidate, not just that it exists.
 	var (
-		previousID   string
-		previousMeta string
+		previousID       string
+		previousMeta     string
+		previousRecords  []evaluation.Record
+		previousAvgScore float64
+		previousAvgConf  float64
 	)
 	if prev, err := e.artifacts.LatestAcceptedByProject(ctx, p.ID); err == nil {
 		previousID = prev.ID
 		previousMeta = prev.ID
+		// Load the previous's own evaluation history (the
+		// records that *describe* the previous when it was a
+		// candidate). A previous with no records is fine —
+		// the prompt just omits the "Previous-record summary"
+		// section. The DB error is non-fatal: a corrupt or
+		// partially-migrated DB should not fail the
+		// comparison phase.
+		if prs, perr := e.eval.ListByArtifact(ctx, prev.ID); perr == nil {
+			previousRecords = prs
+			if n := len(prs); n > 0 {
+				var sumScore, sumConf float64
+				for _, r := range prs {
+					sumScore += r.Score
+					sumConf += r.Confidence
+				}
+				previousAvgScore = sumScore / float64(n)
+				previousAvgConf = sumConf / float64(n)
+			}
+		} else {
+			// Best-effort: log and proceed with empty
+			// previous-record history. The §19.3 guard
+			// does not depend on the previous's records.
+			e.audit(ctx, j.ID, map[string]any{
+				"event":             "previous_records_load_failed",
+				"previous_id":       prev.ID,
+				"error":             perr.Error(),
+			})
+		}
 	} else if !errors.Is(err, artifact.ErrNotFound) {
 		return fmt.Errorf("loading previous accepted artifact: %w", err)
 	}
 
-	instructions := buildComparisonInstructions(final, records, previousID)
+	instructions := buildComparisonInstructions(final, records, previousID, previousRecords, previousAvgScore, previousAvgConf)
 	resp, err := e.call(ctx, j, p, t, llm.PhaseComparing, llm.RoleSecurity, instructions)
 	if err != nil {
 		return err
@@ -117,6 +152,13 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 		"new_artifact_id":      final.ID,
 		"previous_id":          previousMeta,
 		"records":              len(records),
+		// M3-T3 commit 3.1: previous-record context so
+		// post-mortem readers can see how the previous
+		// scored when it was a candidate. Used by the
+		// M3-T7 quality probe for calibration analysis.
+		"previous_records_count":   len(previousRecords),
+		"previous_avg_score":       previousAvgScore,
+		"previous_avg_confidence":  previousAvgConf,
 	})
 
 	// §9.3 status transitions.
@@ -154,8 +196,19 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 // buildComparisonInstructions is the prompt for the security persona.
 // It includes the final artifact content (truncated to 4 KB) and
 // the EvaluationRecord set; the persona must produce the §13.1
-// structured JSON.
-func buildComparisonInstructions(final artifact.Artifact, records []evaluation.Record, previousID string) string {
+// structured JSON. M3-T3 commit 3.1 adds a "Previous-record
+// summary" section that lists the previous accepted artifact's
+// own evaluation history, so the judge can reason about how the
+// previous scored when it was a candidate (not just that it
+// exists).
+func buildComparisonInstructions(
+	final artifact.Artifact,
+	records []evaluation.Record,
+	previousID string,
+	previousRecords []evaluation.Record,
+	previousAvgScore float64,
+	previousAvgConf float64,
+) string {
 	content, _ := osReadFileLimited(final.StoragePath, 4096)
 	var b strings.Builder
 	fmt.Fprintf(&b, "COMPARISON. Decide whether to accept the new artifact.\n"+
@@ -164,6 +217,20 @@ func buildComparisonInstructions(final artifact.Artifact, records []evaluation.R
 	for i, r := range records {
 		fmt.Fprintf(&b, "  record %d: artifact=%s, passed_tests=%v, missing_criteria=%v, security_issues=%v, better_than_previous=%v, confidence=%.2f, summary=%q\n",
 			i+1, r.ArtifactID, r.PassedTests, r.MissingCriteria, r.SecurityIssues, r.BetterThanPrevious, r.Confidence, r.Summary)
+	}
+	if len(previousRecords) > 0 {
+		// §3.1: surface the previous's own evaluation
+		// history. The judge uses this to calibrate
+		// "better than previous" (a non-trivial claim
+		// when the previous scored 0.95 vs 0.30).
+		b.WriteString("\nPrevious-record summary (the previous's own evaluation history):\n")
+		fmt.Fprintf(&b, "  count: %d\n", len(previousRecords))
+		fmt.Fprintf(&b, "  avg_score: %.2f\n", previousAvgScore)
+		fmt.Fprintf(&b, "  avg_confidence: %.2f\n", previousAvgConf)
+		for i, r := range previousRecords {
+			fmt.Fprintf(&b, "  record %d: artifact=%s, passed_tests=%v, better_than_previous=%v, confidence=%.2f, summary=%q\n",
+				i+1, r.ArtifactID, r.PassedTests, r.BetterThanPrevious, r.Confidence, r.Summary)
+		}
 	}
 	b.WriteString("\nNew artifact content (truncated to 4 KB):\n")
 	b.WriteString(content)

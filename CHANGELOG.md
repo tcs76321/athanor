@@ -91,6 +91,29 @@ New entries are appended at the top. Do not rewrite history.
   rejected). `internal/engine/recovery_test.go` proves a
   kill-mid-phase resumes from the last committed state.
 
+- **M3-T2 (close-out, 6 commits).** The evaluation phase
+  ships end-to-end: the §19.1 rubric drives per-archetype
+  acceptance checks, the new `/internal/v1/jobs/{id}/lint`
+  route extends the tool envelope (Gate G2 re-proven), the
+  §19.3 deterministic guard is now a pure function
+  (`DecideWinner`), the per-phase wall-time budget emits a
+  `context_deadline_exceeded` audit row, and the
+  per-task probe in `spikes/m3-t2-probe/` exercises 5
+  code-archetype goals against the rubric. Architectural
+  decisions are recorded in `docs/adr/0011–0014`. The M2-T4
+  pod sub-steps that lived in `phaseSynthesize` are gone
+  (tests now run once per candidate in `evaluating`); see
+  ADR-0014 for the rationale. `make check` is clean: `golangci-lint`
+  0 issues, `go vet` clean, `go test -race ./...` all green;
+  Gates G1 and G2 re-proven. Per-task commits:
+
+  - `M3-T2: drop M2-T4 pod sub-steps from phaseSynthesize (ADR-0014)` — `a4e2362`
+  - `M3-T2: per-archetype evaluation rubric (commit 2.2)` — `4d81540`
+  - `M3-T2: per-task linter via /internal/v1/jobs/{id}/lint route + ruff adapter (commit 2.3)` — `f09380d`
+  - `M3-T2: per-phase wall-time budgets apply to LLM calls (commit 2.4)` — `baa86bd`
+  - `M3-T2: extract §19.3 comparison as DecideWinner pure function (commit 2.5)` — `bc68ebc`
+  - `M3-T2: per-task probe — 5 code goals, rubric coverage report (commit 2.6)` — `97aed91`
+
 ### M2 — Container Spine (continuing)
 
 - **M2-T6.** Security test suite closes Gate G2. Two layers: a

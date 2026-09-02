@@ -114,6 +114,32 @@ New entries are appended at the top. Do not rewrite history.
   - `M3-T2: extract §19.3 comparison as DecideWinner pure function (commit 2.5)` — `bc68ebc`
   - `M3-T2: per-task probe — 5 code goals, rubric coverage report (commit 2.6)` — `97aed91`
 
+- **M3-T3 (close-out, 4 commits).** Comparison phase
+  hardening: (1) the comparison prompt now includes a
+  "Previous-record summary" section so the LLM judge can
+  calibrate "better than previous" against how the previous
+  itself scored (commit 3.1); (2) the supersede + accept
+  transition is now atomic via `artifact.Store.SupersedeAndAccept`
+  — a crash mid-swap can no longer leave a project with
+  zero accepted artifacts, and the §9.3 status flow gains
+  the `accepted → superseded` edge (commit 3.2);
+  (3) `parseComparisonVerdict` trims whitespace before the
+  closed-set check and reports unknown winners via a typed
+  `errUnknownWinner` (no more silent downgrade to "none"),
+  with the engine auditing the downgrade as
+  `comparison_unknown_winner_downgraded` (commit 3.3);
+  (4) the `DecideWinner` table tests gain 6 new rows
+  covering the upper-boundary case (confidence just above
+  threshold), multi-record ties, and the explicit
+  non-promotion of "previous" / "none" verdicts even when a
+  record would back "new" (commit 3.4). `make check` clean;
+  Gates G1 + G2 re-proven. Per-task commits:
+
+  - `M3-T3: comparison prompt includes previous-record summary` — `2fbae3c`
+  - `M3-T3: atomic supersede+accept via SupersedeAndAccept` — `ce24cca`
+  - `M3-T3: trim comparison winner; audit unknown-value downgrades` — `e6b487f`
+  - `M3-T3: DecideWinner table tests for ties + boundaries` — `a5da467`
+
 ### M2 — Container Spine (continuing)
 
 - **M2-T6.** Security test suite closes Gate G2. Two layers: a

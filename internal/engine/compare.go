@@ -165,16 +165,18 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 	switch verdict.Winner {
 	case "new":
 		if previousID != "" {
-			// Supersede the old accepted artifact.
-			if err := e.artifacts.SetStatus(ctx, previousID, artifact.StatusSuperseded); err != nil {
-				var ise *artifact.IllegalStatusError
-				if !errors.As(err, &ise) {
-					return fmt.Errorf("superseding previous: %w", err)
-				}
+			// M3-T3 commit 3.2: the supersede + accept
+			// pair is now one atomic operation. A crash
+			// between the two can no longer leave the
+			// project with zero accepted artifacts; the
+			// transaction commits both updates or neither.
+			if err := e.artifacts.SupersedeAndAccept(ctx, previousID, final.ID); err != nil {
+				return fmt.Errorf("supersede+accept: %w", err)
 			}
-		}
-		if err := e.artifacts.SetStatus(ctx, final.ID, artifact.StatusAccepted); err != nil {
-			return fmt.Errorf("accepting new: %w", err)
+		} else {
+			if err := e.artifacts.SetStatus(ctx, final.ID, artifact.StatusAccepted); err != nil {
+				return fmt.Errorf("accepting new: %w", err)
+			}
 		}
 		_, err = e.jobs.Transition(ctx, j.ID, job.StateCompleted)
 		return err

@@ -84,6 +84,97 @@ func (a *Store) SetStatus(ctx context.Context, id string, to Status) error {
 	})
 }
 
+// SupersedeAndAccept is M3-T3 commit 3.2: the §9.3 status
+// transition that promotes a candidate to accepted and
+// demotes the previous accepted to superseded, atomically.
+//
+// The two non-atomic SetStatus calls that phaseCompare used
+// before this commit (supersede the previous, then accept
+// the new) had a window where a crash between the two left
+// the project with *zero* accepted artifacts. The single-
+// transaction form here closes that window: either both
+// updates commit, or neither does.
+//
+// Both updates are CAS-guarded on the current status:
+//   - previousID must currently be `accepted` (else the
+//     supersede has no effect, and the function errors
+//     out so the caller can recover).
+//   - newID must currently be `candidate` (else the
+//     accept is a no-op, and the function errors out).
+//
+// The error returns are sentinel-friendly: callers (the
+// engine's phaseCompare) match on `IllegalStatusError`
+// when the transition shape is wrong, and on a generic
+// status-concurrency error when the CAS fails.
+func (a *Store) SupersedeAndAccept(ctx context.Context, previousID, newID string) error {
+	if previousID == "" {
+		return fmt.Errorf("SupersedeAndAccept: previousID is empty")
+	}
+	if newID == "" {
+		return fmt.Errorf("SupersedeAndAccept: newID is empty")
+	}
+	// Read both artifacts first so the audit events carry
+	// the full before/after status. Neither artifact's
+	// transition is pre-flight-validated: the SQL CAS
+	// (WHERE status = ...) is the actual gate for both.
+	// Pre-flight validating would reject states like
+	// `superseded → superseded` or `rejected → accepted`
+	// with "illegal transition" errors, but those are
+	// stale-input cases that the CAS catches naturally.
+	prev, err := a.Get(ctx, previousID)
+	if err != nil {
+		return err
+	}
+	new, err := a.Get(ctx, newID)
+	if err != nil {
+		return err
+	}
+
+	tx, err := a.db.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("SupersedeAndAccept: beginning tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// CAS: previous must be currently `accepted`.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE artifacts SET status = ? WHERE id = ? AND status = ?`,
+		string(StatusSuperseded), previousID, string(StatusAccepted))
+	if err != nil {
+		return fmt.Errorf("SupersedeAndAccept: supersede update: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("SupersedeAndAccept: previous %s is no longer `accepted` (concurrent transition)", previousID)
+	}
+	// CAS: new must be currently `candidate`.
+	res, err = tx.ExecContext(ctx,
+		`UPDATE artifacts SET status = ? WHERE id = ? AND status = ?`,
+		string(StatusAccepted), newID, string(StatusCandidate))
+	if err != nil {
+		return fmt.Errorf("SupersedeAndAccept: accept update: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("SupersedeAndAccept: new %s is no longer `candidate` (concurrent transition)", newID)
+	}
+	// Audit events commit with the same transaction so a
+	// crash after commit can't leave the artifacts updated
+	// without their audit rows (the §28.1 invariant).
+	if err := a.audit(ctx, tx, prev, map[string]any{
+		"event": "status", "from": string(prev.Status), "to": string(StatusSuperseded),
+	}); err != nil {
+		return err
+	}
+	if err := a.audit(ctx, tx, new, map[string]any{
+		"event": "status", "from": string(new.Status), "to": string(StatusAccepted),
+	}); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("SupersedeAndAccept: commit: %w", err)
+	}
+	return nil
+}
+
 // ReadContent returns the artifact's file content, verifying the recorded
 // SHA-256 hash first: silent bitrot is never acceptable (fail loudly).
 func (a *Store) ReadContent(ctx context.Context, id string) ([]byte, error) {

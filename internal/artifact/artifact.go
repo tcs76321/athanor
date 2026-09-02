@@ -68,9 +68,20 @@ func (s Status) Terminal() bool {
 //	draft → candidate → accepted
 //	                   → rejected
 //	draft/candidate → quarantined
+//	accepted → superseded
+//
+// M3-T3 commit 3.2 added the accepted → superseded edge so
+// the engine's comparison phase can atomically promote a
+// candidate to accepted and demote the previous accepted
+// to superseded in a single transaction (the §9.3
+// "at most one accepted artifact per project" invariant).
+// NewVersion is the alternative for cases where a
+// non-comparison-phase caller needs the same effect
+// without going through SupersedeAndAccept.
 var statusFlow = map[Status][]Status{
 	StatusDraft:     {StatusCandidate, StatusQuarantine},
 	StatusCandidate: {StatusAccepted, StatusRejected, StatusQuarantine},
+	StatusAccepted:  {StatusSuperseded},
 }
 
 // CanTransition reports whether from → to is a legal §9.3 move.

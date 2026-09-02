@@ -67,8 +67,9 @@ func TestStatusFlow(t *testing.T) {
 		{StatusRejected, StatusCandidate},
 		{StatusQuarantine, StatusDraft},
 		{StatusCandidate, StatusDraft},  // no backwards edges
-		{StatusDraft, StatusSuperseded}, // superseding happens via NewVersion only
-		{StatusAccepted, StatusSuperseded},
+		{StatusDraft, StatusSuperseded}, // draft is not yet a candidate; promote first
+		{StatusSuperseded, StatusAccepted}, // superseded is terminal
+		{StatusRejected, StatusAccepted},
 	}
 	for _, tc := range illegal {
 		if CanTransition(tc.from, tc.to) {

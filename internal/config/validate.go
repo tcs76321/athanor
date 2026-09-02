@@ -81,8 +81,8 @@ func validateRaw(c *Config) error {
 	if n := c.Execution.DivergenceCandidates; n != 0 && n < 1 {
 		return fmt.Errorf("execution.divergence_candidates must be >= 1, got %d", n)
 	}
-	if v := c.Execution.MinJudgeConfidence; v != 0 && (v < 0 || v > 1) {
-		return fmt.Errorf("execution.min_judge_confidence must be within [0, 1], got %v", v)
+	if v := c.Execution.MinJudgeConfidence; v != nil && (*v < 0 || *v > 1) {
+		return fmt.Errorf("execution.min_judge_confidence must be within [0, 1], got %v", *v)
 	}
 	switch p := c.Network.DefaultPolicy; p {
 	case "", "deny", "allow":

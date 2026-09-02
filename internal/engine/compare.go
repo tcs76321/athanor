@@ -152,10 +152,21 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 	// threshold (config default 0.7 when zero) and
 	// `hasPrevious` (whether the project has a prior
 	// accepted artifact) before the call.
-	threshold := e.cfg.Execution.MinJudgeConfidence
-	if threshold <= 0 {
-		threshold = 0.7
-	}
+	// §19.3 deterministic guard, parameterized by
+	// `cfg.Execution.MinJudgeConfidence`. The default value
+	// (0.7) is filled in once by `internal/config/defaults.go`
+	// at load time. Setting the field explicitly to 0
+	// disables the guard end-to-end — the LLM's verdict
+	// stands even with no back-up record — matching
+	// `DecideWinner`'s documented `threshold <= 0` disabled
+	// sentinel. There is intentionally no rescue to 0.7 here:
+	// the defaults package is the single source of the
+	// default, and an operator who sets 0 expects the guard
+	// to be off. `Execution.MinJudge()` resolves the
+	// `*float64` (which is nil for "unset" and 0.0 for
+	// "explicitly disabled") to a plain float64 with the
+	// 0.7 default applied only when nil.
+	threshold := e.cfg.Execution.MinJudge()
 	verdict = DecideWinner(verdict, records, threshold, previousID != "")
 
 	e.audit(ctx, j.ID, map[string]any{

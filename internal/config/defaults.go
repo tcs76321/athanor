@@ -95,8 +95,9 @@ func applyDefaults(c *Config) {
 	setTrue(&c.Execution.RequireTestsForCode)
 	setTrue(&c.Execution.RequireDocumentationForCode)
 	setTrue(&c.Execution.CompareBeforeAccept)
-	if c.Execution.MinJudgeConfidence == 0 {
-		c.Execution.MinJudgeConfidence = 0.7
+	if c.Execution.MinJudgeConfidence == nil {
+		def := 0.7
+		c.Execution.MinJudgeConfidence = &def
 	}
 	if c.Execution.PhaseWallTimeBudgets == nil {
 		c.Execution.PhaseWallTimeBudgets = map[string]Duration{}

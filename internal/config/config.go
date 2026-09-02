@@ -170,8 +170,32 @@ type Execution struct {
 	RequireTestsForCode         *bool               `yaml:"require_tests_for_code"`
 	RequireDocumentationForCode *bool               `yaml:"require_documentation_for_code"`
 	CompareBeforeAccept         *bool               `yaml:"compare_before_accept"`
-	MinJudgeConfidence          float64             `yaml:"min_judge_confidence"`
-	PhaseWallTimeBudgets        map[string]Duration `yaml:"phase_wall_time_budgets"`
+	// MinJudgeConfidence is the §19.3 deterministic guard
+	// threshold. The pointer type lets the operator explicitly
+	// disable the guard by setting the value to 0 (the
+	// documented disabled sentinel): `*float64` distinguishes
+	// "unset" (use the default 0.7) from "explicitly zero"
+	// (disable). The same pattern is used for the `*bool` fields
+	// above (where "unset" and "explicitly false" must be
+	// distinguishable). Consumers that need a plain float64
+	// resolve via `Execution.MinJudge()` below, which applies
+	// the 0.7 default when the field is nil.
+	MinJudgeConfidence   *float64            `yaml:"min_judge_confidence"`
+	PhaseWallTimeBudgets map[string]Duration `yaml:"phase_wall_time_budgets"`
+}
+
+// MinJudge returns the §19.3 guard threshold, applying the
+// 0.7 default when the operator left the field unset.
+// Explicit 0 is returned as 0 (the disabled sentinel —
+// DecideWinner treats `threshold <= 0` as "every record
+// meets the bar"). This is the only call site consumers
+// should use; reading the raw `*float64` field is reserved
+// for the config layer (defaults, validation, serialization).
+func (e *Execution) MinJudge() float64 {
+	if e.MinJudgeConfidence == nil {
+		return 0.7
+	}
+	return *e.MinJudgeConfidence
 }
 
 // PhaseBudget returns the wall-time budget for a phase, falling back to the

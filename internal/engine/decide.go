@@ -22,6 +22,21 @@
 // not a recommendation engine. (A future M3-T3 may add a
 // "LLM says previous but a strong record exists → reconsider"
 // rule, but it is not part of the M3-T1 contract.)
+//
+// Operator-facing contract: setting
+// `execution.min_judge_confidence: 0` in `config.yaml`
+// disables the §19.3 guard via configuration. The pure
+// function's contract is `threshold <= 0` is the disabled
+// sentinel — every record (if any) meets the bar, so the
+// LLM's verdict stands regardless of `better_than_previous`
+// evidence. The engine caller (`phaseCompare` in
+// `compare.go`) passes the config value through unchanged;
+// `internal/config/defaults.go` is the single source of the
+// 0.7 default and fills it in once at load time. A previous
+// version of `compare.go` overrode an explicit 0 back to 0.7
+// inside the engine, making the disabled mode unreachable
+// through config. That override was removed; this comment
+// documents the new contract for future maintainers.
 package engine
 
 import (

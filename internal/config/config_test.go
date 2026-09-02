@@ -188,6 +188,91 @@ func TestValidateRejectsInvalidSemantics(t *testing.T) {
 	}
 }
 
+// TestMinJudgeConfidence_ZeroSurvivesLoad pins the
+// operator-facing contract: setting
+// `execution.min_judge_confidence: 0` is the documented
+// disabled sentinel for the §19.3 deterministic guard,
+// and the value must survive the load pipeline (no error,
+// field preserved). A previous version of
+// `internal/engine/compare.go` overrode an explicit 0
+// back to 0.7 inside the engine, making the disabled
+// mode unreachable through config. The override was
+// removed; this test pins the new contract at the
+// config layer.
+func TestMinJudgeConfidence_ZeroSurvivesLoad(t *testing.T) {
+	cfg, err := Parse([]byte("version: 2\nexecution:\n  min_judge_confidence: 0\n"))
+	if err != nil {
+		t.Fatalf("Parse(min_judge_confidence=0) = %v, want nil (zero is the disabled sentinel)", err)
+	}
+	if cfg.Execution.MinJudgeConfidence == nil {
+		t.Fatal("MinJudgeConfidence is nil, want &0 (disabled sentinel preserved)")
+	}
+	if *cfg.Execution.MinJudgeConfidence != 0 {
+		t.Errorf("*MinJudgeConfidence = %v, want 0 (disabled sentinel preserved)", *cfg.Execution.MinJudgeConfidence)
+	}
+	if got := cfg.Execution.MinJudge(); got != 0 {
+		t.Errorf("MinJudge() = %v, want 0 (disabled sentinel returned)", got)
+	}
+}
+
+// TestMinJudgeConfidence_CustomValuePreserved: a
+// non-default threshold (0.42) is loaded verbatim.
+// The engine respects it end-to-end via
+// `TestCompare_CustomThreshold`; this test pins the
+// config layer in isolation.
+func TestMinJudgeConfidence_CustomValuePreserved(t *testing.T) {
+	cfg, err := Parse([]byte("version: 2\nexecution:\n  min_judge_confidence: 0.42\n"))
+	if err != nil {
+		t.Fatalf("Parse(min_judge_confidence=0.42) = %v, want nil", err)
+	}
+	if cfg.Execution.MinJudgeConfidence == nil {
+		t.Fatal("MinJudgeConfidence is nil, want &0.42")
+	}
+	if *cfg.Execution.MinJudgeConfidence != 0.42 {
+		t.Errorf("*MinJudgeConfidence = %v, want 0.42 (custom value preserved)", *cfg.Execution.MinJudgeConfidence)
+	}
+	if got := cfg.Execution.MinJudge(); got != 0.42 {
+		t.Errorf("MinJudge() = %v, want 0.42 (custom value returned)", got)
+	}
+}
+
+// TestMinJudgeConfidence_OutOfRangeRejected: a
+// value > 1.0 still fails validation. The disabled
+// sentinel (0) is a separate case and must NOT trip
+// the range check.
+func TestMinJudgeConfidence_OutOfRangeRejected(t *testing.T) {
+	_, err := Parse([]byte("version: 2\nexecution:\n  min_judge_confidence: 1.5\n"))
+	if err == nil {
+		t.Fatal("Parse(min_judge_confidence=1.5) = nil, want range error")
+	}
+	if !strings.Contains(err.Error(), "min_judge_confidence") {
+		t.Errorf("err = %q, want min_judge_confidence in message", err.Error())
+	}
+}
+
+// TestMinJudgeConfidence_UnsetAppliesDefault: a
+// minimal config that omits the field entirely must
+// have the 0.7 default applied by `applyDefaults`,
+// and `MinJudge()` must return 0.7. This pins the
+// default-fill behavior so a future refactor that
+// changes the default can't silently break callers
+// that rely on the documented 0.7.
+func TestMinJudgeConfidence_UnsetAppliesDefault(t *testing.T) {
+	cfg, err := Parse([]byte("version: 2\n"))
+	if err != nil {
+		t.Fatalf("Parse(minimal) = %v, want nil", err)
+	}
+	if cfg.Execution.MinJudgeConfidence == nil {
+		t.Fatal("MinJudgeConfidence is nil after Parse; applyDefaults should have set it")
+	}
+	if *cfg.Execution.MinJudgeConfidence != 0.7 {
+		t.Errorf("*MinJudgeConfidence = %v, want 0.7 (default applied)", *cfg.Execution.MinJudgeConfidence)
+	}
+	if got := cfg.Execution.MinJudge(); got != 0.7 {
+		t.Errorf("MinJudge() = %v, want 0.7 (default returned)", got)
+	}
+}
+
 func TestExplicitFalseHonoredForDefaultTrueFlags(t *testing.T) {
 	cfg, err := Parse([]byte("version: 2\npower:\n  daydream_on_idle: false\nsecurity:\n  scan_ingress_files: false\nbackup:\n  auto: false\n"))
 	if err != nil {

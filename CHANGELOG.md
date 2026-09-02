@@ -157,6 +157,36 @@ New entries are appended at the top. Do not rewrite history.
   - `M3-T4: typed reflection counter in system_state` — `6956a1f`
   - `M3-T4: Execution.MaxReflectionLoops config field` — `dbe3478`
 
+- **M3-T5 (1 commit).** Widens the closed tool
+  envelope to include `git_operation` for the
+  M3-T7 work that records accepted artifacts to a
+  project-local git repo. The actual call site is
+  M3-T7 work; this commit only widens the closed
+  set and the matching test. Per-task commit:
+
+  - `M3-T5: git_operation tool in closed set` — `7ef6d34`
+
+- **M3-T6 (1 commit).** Crash-recovery E2E coverage
+  at the two phase boundaries the M1-T8 close-out
+  did not exercise: `StateDiverging` (the job
+  enters divergence but no candidate artifacts
+  are persisted yet) and `StateEvaluating` (the
+  job enters evaluating but no evaluation records
+  are persisted). Per-task commit:
+
+  - `M3-T6: crash-recovery at mid-diverging + mid-evaluating` — `d85a886`
+
+- **M3-T7 (1 commit).** Dialectical-vs-single-shot
+  quality probe scaffold: defines the
+  `dialecticalResult` data contract and the
+  loopback-HTTP client the three sub-measurements
+  (T-a calibration, T-b stability at T=0, T-c
+  diversity Jaccard) will consume. The actual
+  experiments land in follow-up work. Per-task
+  commit:
+
+  - `M3-T7: dialectical probe scaffold (T-a/b/c contract)` — (this commit)
+
 ### M2 — Container Spine (continuing)
 
 - **M2-T6.** Security test suite closes Gate G2. Two layers: a

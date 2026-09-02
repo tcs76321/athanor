@@ -9,6 +9,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -94,5 +95,76 @@ func TestBuildComparisonInstructions_IncludesPreviousSection(t *testing.T) {
 	// (the section is additive, not a replacement).
 	if !strings.Contains(got, "EvaluationRecords for the new artifact") {
 		t.Errorf("new-artifact records section must still be present; got:\n%s", got)
+	}
+}
+
+// TestParseComparisonVerdict_TrimsWhitespace covers the
+// M3-T3 commit 3.3 fix: a winner with leading/trailing
+// whitespace is honored after TrimSpace.
+func TestParseComparisonVerdict_TrimsWhitespace(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		wantWinner string
+	}{
+		{"trailing newline", `{"winner":"new\n","confidence":0.9,"reasons":[],"missing_requirements":[]}`, "new"},
+		{"leading spaces", `{"winner":"   new","confidence":0.9,"reasons":[],"missing_requirements":[]}`, "new"},
+		{"both", `{"winner":"\tnew\n","confidence":0.9,"reasons":[],"missing_requirements":[]}`, "new"},
+		{"whitespace around previous", `{"winner":"  previous\t","confidence":0.9,"reasons":[],"missing_requirements":[]}`, "previous"},
+		{"whitespace around none", `{"winner":" none\n","confidence":0.9,"reasons":[],"missing_requirements":[]}`, "none"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseComparisonVerdict(tc.input)
+			if err != nil {
+				t.Fatalf("parseComparisonVerdict: %v", err)
+			}
+			if got.Winner != tc.wantWinner {
+				t.Errorf("Winner = %q, want %q", got.Winner, tc.wantWinner)
+			}
+		})
+	}
+}
+
+// TestParseComparisonVerdict_UnknownWinnerReturnsTypedError
+// covers the M3-T3 commit 3.3 behavior: an unknown winner
+// returns an error that wraps errUnknownWinner. The engine's
+// phaseCompare catches this, audits the downgrade, and
+// proceeds with winner="none".
+func TestParseComparisonVerdict_UnknownWinnerReturnsTypedError(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"empty string", `{"winner":"","confidence":0.9,"reasons":[],"missing_requirements":[]}`},
+		{"typo", `{"winner":"newish","confidence":0.9,"reasons":[],"missing_requirements":[]}`},
+		{"uppercase", `{"winner":"NEW","confidence":0.9,"reasons":[],"missing_requirements":[]}`},
+		{"random word", `{"winner":"maybe","confidence":0.9,"reasons":[],"missing_requirements":[]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseComparisonVerdict(tc.input)
+			if err == nil {
+				t.Fatalf("parseComparisonVerdict returned nil error for unknown winner; want typed error")
+			}
+			if !isUnknownWinnerErr(err) {
+				t.Errorf("error = %v, want errors.Is(err, errUnknownWinner)", err)
+			}
+		})
+	}
+}
+
+// TestIsUnknownWinnerErr_TrueOnlyForTheSentinel pins the
+// errors.Is contract: the helper returns true iff the
+// error chain contains errUnknownWinner.
+func TestIsUnknownWinnerErr_TrueOnlyForTheSentinel(t *testing.T) {
+	if !isUnknownWinnerErr(fmt.Errorf("wrapped: %w", errUnknownWinner)) {
+		t.Error("wrapped errUnknownWinner should be detected")
+	}
+	if isUnknownWinnerErr(nil) {
+		t.Error("nil should not be detected as errUnknownWinner")
+	}
+	if isUnknownWinnerErr(fmt.Errorf("plain error")) {
+		t.Error("plain error should not be detected as errUnknownWinner")
 	}
 }

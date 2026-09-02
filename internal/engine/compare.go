@@ -129,7 +129,23 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 
 	verdict, err := parseComparisonVerdict(resp.Content)
 	if err != nil {
-		return fmt.Errorf("parsing comparison verdict: %w", err)
+		// M3-T3 commit 3.3: the unknown-winner case is
+		// now a typed error, not a silent downgrade. The
+		// caller (here) audits the downgrade and proceeds
+		// with the verdict's Winner set to "none" (the
+		// safe default). All other parse errors are
+		// hard-failures.
+		if isUnknownWinnerErr(err) {
+			e.audit(ctx, j.ID, map[string]any{
+				"event":          "comparison_unknown_winner_downgraded",
+				"raw_winner":     verdict.Winner,
+				"downgraded_to":  "none",
+				"new_artifact_id": final.ID,
+			})
+			verdict.Winner = "none"
+		} else {
+			return fmt.Errorf("parsing comparison verdict: %w", err)
+		}
 	}
 
 	// M3-T2 commit 2.5: the §19.3 deterministic guard is now
@@ -260,8 +276,38 @@ func osReadFileLimited(path string, limit int) (string, error) {
 	return string(buf[:n]), nil
 }
 
+// errUnknownWinner is the sentinel parseComparisonVerdict
+// returns when the security persona's verdict has a `winner`
+// field whose value is outside the closed set
+// `{"new","previous","none"}`. M3-T3 commit 3.3 changed this
+// from a silent downgrade (v.Winner = "none") to a typed
+// error so the engine can audit the downgrade explicitly
+// via the `comparison_unknown_winner_downgraded` event.
+//
+// The parseComparisonVerdict function still trims
+// whitespace (the M3-T1 carry-over polish item from
+// `docs/m3-t1-plan.md:128–136`); a value that becomes a
+// known string after trimming is honored.
+var errUnknownWinner = errors.New("compare: unknown winner value")
+
+// isUnknownWinnerErr is the errors.Is-compatible check.
+// Errors are wrapped via fmt.Errorf("...%w", errUnknownWinner)
+// so the caller can branch on the type without a type
+// assertion.
+func isUnknownWinnerErr(err error) bool {
+	return errors.Is(err, errUnknownWinner)
+}
+
 // parseComparisonVerdict is the comparison-phase twin of
 // parseEvalVerdict. Same lenient-wrapping tolerance.
+//
+// M3-T3 commit 3.3 added two refinements on top of the M3-T1
+// version: (a) the parsed Winner field is TrimSpace'd
+// before the closed-set check, so a model that emits
+// `  "new"\n` (whitespace around the string) is honored; (b)
+// an unknown winner is reported via errUnknownWinner
+// rather than silently downgraded to "none", so the engine
+// can audit the downgrade.
 func parseComparisonVerdict(content string) (comparisonVerdict, error) {
 	var v comparisonVerdict
 	start := -1
@@ -312,12 +358,23 @@ func parseComparisonVerdict(content string) (comparisonVerdict, error) {
 	if err := json.Unmarshal([]byte(content[start:end+1]), &v); err != nil {
 		return v, fmt.Errorf("decoding comparison verdict: %w", err)
 	}
-	// Normalize the winner to one of the three known values; an
-	// unknown string is treated as "none" (the safest default).
+	// M3-T3 commit 3.3: trim whitespace before the
+	// closed-set check. The M3-T1 carry-over polish item
+	// in `docs/m3-t1-plan.md:128–136` was that `  "new"\n`
+	// or `"new\n"` would normalize to "none" — this trim
+	// fixes that.
+	v.Winner = strings.TrimSpace(v.Winner)
 	switch v.Winner {
 	case "new", "previous", "none":
+		// known; honor as-is
 	default:
-		v.Winner = "none"
+		// Unknown: return the typed error so the caller
+		// can audit the downgrade. The engine's phaseCompare
+		// catches this, emits a
+		// `comparison_unknown_winner_downgraded` audit
+		// event, and proceeds with the verdict's Winner
+		// set to "none" (the safe default).
+		return v, fmt.Errorf("winner %q: %w", v.Winner, errUnknownWinner)
 	}
 	return v, nil
 }

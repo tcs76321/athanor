@@ -197,6 +197,91 @@ func TestDecideWinner(t *testing.T) {
 			wantWinner:           "previous",
 			wantReasonContains: "downgraded from 'new' to 'previous'",
 		},
+		// 12. Upper boundary: confidence just above threshold
+		//     (threshold + 0.0001) → "new" stays. The strict-
+		//     greater check means the record is accepted as
+		//     strongNew, even though the margin is tiny.
+		{
+			name:                "boundary_just_above_threshold_stays_new",
+			verdict:             verdictFor("new"),
+			records:             []evaluation.Record{recordFor(true, 0.7001)}, // threshold + 0.0001
+			threshold:           0.7,
+			hasPrevious:         true,
+			wantWinner:           "new",
+			wantReasonContains: "",
+		},
+		// 13. Ties: multiple records all meet the threshold
+		//     → still "new" (the first one in the slice
+		//     triggers the short-circuit). Sanity check on
+		//     the for-loop's break-on-first-match behavior.
+		{
+			name:    "ties_multiple_meet",
+			verdict: verdictFor("new"),
+			records: []evaluation.Record{
+				recordFor(true, 0.9),
+				recordFor(true, 0.95),
+				recordFor(true, 0.8),
+			},
+			threshold:           0.7,
+			hasPrevious:         true,
+			wantWinner:           "new",
+			wantReasonContains: "",
+		},
+		// 14. The guard does not promote "previous" → "new"
+		//     even when a record would back it. Verifies the
+		//     direction: the LLM's "previous" verdict stays
+		//     "previous" regardless of records. (This is
+		//     already covered by row 6 in spirit; the
+		//     separate row makes the contract explicit.)
+		{
+			name:    "previous_verdict_with_strong_record_stays_previous",
+			verdict: verdictFor("previous"),
+			records: []evaluation.Record{
+				recordFor(true, 0.95), // would back "new" if asked
+			},
+			threshold:           0.7,
+			hasPrevious:         true,
+			wantWinner:           "previous",
+			wantReasonContains: "",
+		},
+		// 15. The guard does not promote "none" → "new" even
+		//     when a record would back it. The §19.3 rule is a
+		//     floor on acceptance, not a recommendation
+		//     engine.
+		{
+			name:    "none_verdict_with_strong_record_stays_none",
+			verdict: verdictFor("none"),
+			records: []evaluation.Record{
+				recordFor(true, 0.95),
+			},
+			threshold:           0.7,
+			hasPrevious:         true,
+			wantWinner:           "none",
+			wantReasonContains: "",
+		},
+		// 16. No previous, LLM "previous" → stays "previous"
+		//     (the guard does nothing; the §19.3 rule is not
+		//     sensitive to whether a previous exists when the
+		//     LLM said "previous" or "none").
+		{
+			name:        "no_previous_previous_verdict_stays_previous",
+			verdict:     verdictFor("previous"),
+			records:     nil,
+			threshold:   0.7,
+			hasPrevious: false,
+			wantWinner:  "previous",
+			wantReasonContains: "",
+		},
+		// 17. No previous, LLM "none" → stays "none".
+		{
+			name:        "no_previous_none_verdict_stays_none",
+			verdict:     verdictFor("none"),
+			records:     nil,
+			threshold:   0.7,
+			hasPrevious: false,
+			wantWinner:  "none",
+			wantReasonContains: "",
+		},
 	}
 
 	for _, tc := range cases {

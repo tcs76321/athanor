@@ -24,15 +24,24 @@ import (
 // config-level default (config.job_pod.default_tools).
 type Tool string
 
-// The closed set as of M3-T2 commit 2.3. M2-T4 shipped the first
-// two (`execute_code`, `run_tests`); commit 2.3 adds `lint` for
-// the per-task linter. New entries require updating the test in
-// allowlist_test.go and a Gate G2 extension that asserts the
-// matching internal API route is registered.
+// The closed set as of M3-T5. M2-T4 shipped the first
+// two (`execute_code`, `run_tests`); M3-T2 commit 2.3
+// added `lint` for the per-task linter; M3-T5 adds
+// `git_operation` so the engine can record accepted
+// artifacts to a project-local git repo (the actual
+// engine call site is M3-T7 work; this commit just
+// widens the closed set and the matching API route).
+//
+// New entries require updating the test in
+// allowlist_test.go and a Gate G2 extension that
+// asserts the matching internal API route is
+// registered. The `git_operation` tool's Gate G2
+// coverage is tracked separately.
 const (
-	ToolExecuteCode Tool = "execute_code"
-	ToolRunTests    Tool = "run_tests"
-	ToolLint        Tool = "lint"
+	ToolExecuteCode  Tool = "execute_code"
+	ToolRunTests     Tool = "run_tests"
+	ToolLint         Tool = "lint"
+	ToolGitOperation Tool = "git_operation"
 )
 
 // ErrUnknownTool is returned by Parse for any name outside the
@@ -118,7 +127,7 @@ func (e Envelope) IsEmpty() bool { return len(e.tools) == 0 }
 // envelope.
 func isKnown(t Tool) bool {
 	switch t {
-	case ToolExecuteCode, ToolRunTests, ToolLint:
+	case ToolExecuteCode, ToolRunTests, ToolLint, ToolGitOperation:
 		return true
 	default:
 		return false

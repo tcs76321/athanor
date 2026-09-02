@@ -20,9 +20,10 @@ func TestParse_KnownTools(t *testing.T) {
 		{"execute_code only", []string{"execute_code"}, []Tool{ToolExecuteCode}},
 		{"run_tests only", []string{"run_tests"}, []Tool{ToolRunTests}},
 		{"lint only", []string{"lint"}, []Tool{ToolLint}},
-		{"all three, order-insensitive", []string{"run_tests", "lint", "execute_code"}, []Tool{ToolExecuteCode, ToolLint, ToolRunTests}},
+		{"git_operation only", []string{"git_operation"}, []Tool{ToolGitOperation}},
+		{"all four, order-insensitive", []string{"run_tests", "lint", "execute_code", "git_operation"}, []Tool{ToolExecuteCode, ToolGitOperation, ToolLint, ToolRunTests}},
 		{"both, order-insensitive", []string{"run_tests", "execute_code"}, []Tool{ToolExecuteCode, ToolRunTests}},
-		{"duplicates deduped", []string{"execute_code", "execute_code", "run_tests", "lint"}, []Tool{ToolExecuteCode, ToolLint, ToolRunTests}},
+		{"duplicates deduped", []string{"execute_code", "execute_code", "run_tests", "lint", "git_operation"}, []Tool{ToolExecuteCode, ToolGitOperation, ToolLint, ToolRunTests}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,7 +48,7 @@ func TestParse_KnownTools(t *testing.T) {
 				}
 			}
 			// Tools NOT in the envelope are rejected.
-			for _, missing := range []Tool{ToolExecuteCode, ToolRunTests, ToolLint} {
+			for _, missing := range []Tool{ToolExecuteCode, ToolRunTests, ToolLint, ToolGitOperation} {
 				isIn := false
 				for _, in := range tc.want {
 					if in == missing {
@@ -97,6 +98,9 @@ func TestEnvelope_ZeroValueIsEmpty(t *testing.T) {
 	}
 	if env.Allows(ToolLint) {
 		t.Errorf("zero Envelope Allows(lint) = true, want false")
+	}
+	if env.Allows(ToolGitOperation) {
+		t.Errorf("zero Envelope Allows(git_operation) = true, want false")
 	}
 	got := env.Tools()
 	if len(got) != 0 {

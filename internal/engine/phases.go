@@ -72,6 +72,10 @@ func (e *Engine) contexts(ctx context.Context, j job.Job) (project.Project, proj
 func (e *Engine) call(ctx context.Context, j job.Job, p project.Project, t project.Task,
 	phase, role string, extraInstructions string) (llm.Response, error) {
 
+	if e.cfg == nil {
+		return llm.Response{}, errors.New("engine: cfg is nil (call requires config)")
+	}
+
 	persona, ok := e.registry.Persona(role)
 	if !ok {
 		return llm.Response{}, fmt.Errorf("persona %q missing from registry", role)

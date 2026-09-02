@@ -44,6 +44,9 @@ func (e *Engine) phaseCompare(ctx context.Context, j job.Job) error {
 	if e.eval == nil {
 		return errors.New("engine: evaluation repo is nil (M3-T1; tests must pass it)")
 	}
+	if e.cfg == nil {
+		return errors.New("engine: cfg is nil (compare phase requires config)")
+	}
 	p, t, err := e.contexts(ctx, j)
 	if err != nil {
 		return err

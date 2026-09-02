@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/tcs76321/athanor/internal/artifact"
@@ -31,6 +32,9 @@ func (e *Engine) phaseDivergeN(ctx context.Context, j job.Job) error {
 	p, t, err := e.contexts(ctx, j)
 	if err != nil {
 		return err
+	}
+	if e.cfg == nil {
+		return errors.New("engine: cfg is nil (diverge phase requires config)")
 	}
 	n := e.cfg.Execution.DivergenceCandidates
 	if n < 1 {

@@ -13,10 +13,36 @@ import (
 //     and the audit event commit together (§8.2, ADR-0006),
 //   - compare-and-swap against the state read at call time, so a
 //     concurrent transition loses loudly instead of overwriting.
+//
+// Race note: when `current.State == to` at read time, the caller
+// is observing the same state another writer has just committed
+// (the §8.2 state machine has no self-loops, so no production
+// path ever requests `state -> state`). We return
+// ErrConcurrentTransition rather than IllegalTransitionError
+// because the precondition check is the wrong layer to report
+// a race through — the loser of two concurrent transitions
+// consistently sees the race error, not a self-loop error.
+// ValidateTransition still rejects `from == to` (the table
+// is unchanged; `state_test.go` pins the contract), and
+// `state_test.go`'s self-loop assertions are unaffected
+// because they call ValidateTransition directly, not through
+// Repository.Transition.
 func (r *Repository) Transition(ctx context.Context, id string, to State) (Job, error) {
 	current, err := r.Get(ctx, id)
 	if err != nil {
 		return Job{}, err
+	}
+	if current.State == to {
+		// Same-state at read time: the only way this happens in
+		// production is when another writer moved the job to
+		// exactly the target state between our read and our
+		// transition. The CAS below would also catch it
+		// (RowsAffected == 0), but the precondition check
+		// would otherwise surface this as
+		// IllegalTransitionError — the wrong error type for a
+		// race. Report ErrConcurrentTransition so the loser
+		// consistently sees the race.
+		return Job{}, fmt.Errorf("%w: job %s already in state %q", ErrConcurrentTransition, id, to)
 	}
 
 	if err := ValidateTransition(current.State, to); err != nil {

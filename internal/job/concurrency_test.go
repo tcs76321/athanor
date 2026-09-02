@@ -50,6 +50,48 @@ func TestConcurrentTransitionLosesLoudly(t *testing.T) {
 	}
 }
 
+// TestConcurrentTransition_DifferentTargetsRacesCAS is the
+// complementary coverage for the same-target race in
+// TestConcurrentTransitionLosesLoudly. Two writers request
+// *different* legal transitions from the same starting state
+// (`planning -> diverging` vs `planning -> paused`, both
+// legal from planning per the §8.2 table). Exactly one wins
+// the SQL CAS; the loser sees ErrConcurrentTransition. This
+// exercises the CAS branch in Repository.Transition itself,
+// not the same-state short-circuit in the sibling test, so
+// future regressions in either layer are caught by their
+// own test.
+func TestConcurrentTransition_DifferentTargetsRacesCAS(t *testing.T) {
+	r, s := openRepo(t)
+	projectID, taskID := seedProjectTask(t, s)
+	ctx := context.Background()
+	j, err := r.Create(ctx, taskID, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runTo(t, r, j.ID, StateContextBuilding, StatePlanning)
+
+	winner := make(chan error, 1)
+	loser := make(chan error, 1)
+	go func() { _, err := r.Transition(ctx, j.ID, StateDiverging); winner <- err }()
+	go func() { _, err := r.Transition(ctx, j.ID, StatePaused); loser <- err }()
+
+	errW, errL := <-winner, <-loser
+	if errW != nil && errL != nil {
+		t.Fatalf("both concurrent transitions failed: %v / %v", errW, errL)
+	}
+	if errW == nil && errL == nil {
+		t.Fatal("both concurrent transitions succeeded; CAS guard missing")
+	}
+	failed := errW
+	if failed == nil {
+		failed = errL
+	}
+	if !errors.Is(failed, ErrConcurrentTransition) {
+		t.Fatalf("loser error = %v, want ErrConcurrentTransition", failed)
+	}
+}
+
 func TestSetRecoveryFlag(t *testing.T) {
 	r, s := openRepo(t)
 	projectID, taskID := seedProjectTask(t, s)

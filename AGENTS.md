@@ -11,12 +11,24 @@ purpose; details live in `ARCHITECTURE.md`, `ROADMAP.md`, and `DEVELOPMENT.md`.
   `CGO_ENABLED=1` is set. See `DEVELOPMENT.md`.
 - Keep command output short. Pipe through `head`, `tail`, or `grep` when
   inspecting long output; the full result is rarely needed.
-- No multiline input via `heredoc` (`<<EOF`) or `printf` line-stacking.
-  Multiline shell input is fragile in the tool's terminal: long heredocs
-  produce garbled output and silently fail mid-stream. For multi-line file
-  content, write the file with the editor tool, not by piping to `cat`,
-  `tee`, or `printf`. If a single command genuinely needs more than one
-  line of input, break it into separate calls.
+- **No multiline input of any kind.** The tool runner's shell cannot
+  reliably accept input that spans more than one line. This applies to:
+  - Heredocs (`<<EOF`, `<<'EOF'`, `<<-`).
+  - `printf` line-stacking.
+  - `git commit -m 'a' -m 'b'` (two `-m` flags) — use a single `-m`.
+  - `git commit -F -` followed by stdin input.
+  - `python3 << 'PYEOF'` and any other `<<` redirect.
+  - `cat | tee`, `printf | sh`, or any pipe that supplies more than
+    one line of stdin.
+  - For multi-line file content, **write the file with the editor
+    tool**, not by piping to `cat`, `tee`, or `printf`. If a single
+    command genuinely needs more than one line of input, break it
+    into separate calls.
+- The same ban extends to **interactive programs that read from
+  stdin after launch** (`q`, `Ctrl-C`, `cat`, `less`). The agent
+  must not send keystrokes to a process the tool runner started;
+  if a previous command appears hung, the agent stops, reports the
+  state, and waits for the human.
 
 ## Git and pagers
 
@@ -47,24 +59,71 @@ purpose; details live in `ARCHITECTURE.md`, `ROADMAP.md`, and `DEVELOPMENT.md`.
 
 ## Commits — agent ↔ human handoff
 
-- The human signs every commit (GPG). The agent stages the
-  files, runs `make check`, and shows the staged diff and the
-  proposed commit message. The agent then runs `git commit -m
-  "<type>: <title>"` and the human types the GPG passphrase in
-  the same terminal. One commit per logical change; do not
-  batch unrelated work.
+The human signs every commit (GPG). The agent stages the files,
+runs `make check`, shows the staged diff, and stops. The human
+runs `git commit` (or the agent runs it once on the human's
+signal) and types the GPG passphrase in their own terminal. One
+commit per logical change; do not batch unrelated work.
+
+**Commit message format — strict:**
+
+- **Exactly one `-m`.** The agent MUST use a single
+  `git commit -m '<full message>'` invocation. The second `-m`
+  flag, heredoc bodies, `printf | git commit -F -`, and any
+  other multiline input are **forbidden** for the same reason
+  heredocs are forbidden in §Commands: long or multi-arg
+  invocations hang the tool runner's shell (`quote>` prompt,
+  swallowed EOF, garbled output) and the agent has no way to
+  recover the prompt.
+- **The full message fits on one line.** Title + body, in one
+  line, in one set of single quotes. If the body is needed it
+  goes inside the same single-quoted string, separated from the
+  title by ` — ` (em-dash, two spaces) or by a single space;
+  no embedded newlines.
+  - Good: `git commit -m 'M4-T1: path containment library + adversarial-corpus tests — paths under internal/airlock/paths, O_NOFOLLOW via gated syscall files (Gate G1 rule 5).'`
+  - Bad: `git commit -m 'title' -m 'body line 1\nline 2'` (two `-m`s, multiline).
+  - Bad: `git commit -F -` followed by a heredoc.
+- **Bodies are short.** One line, ≤120 characters total. If the
+  rationale is longer than that, it belongs in the ADR or the
+  commit's CHANGELOG entry, not in the commit message.
+- **No trailing period.** Lowercase, terse, matches existing
+  style (`M#-T#:`, `chore:`, `docs:`, `ci:`, `fix:`).
+
+**GPG signing — strict:**
+
 - The agent must never use `--no-gpg-sign`, `git -c
   commit.gpgsign=false`, `GIT_GPG_PROGRAM=true`, or any other
   mechanism that bypasses the human's GPG signing. The
   signature is the audit trail.
-- If a commit is malformed (wrong message, missing file),
-  reset with `git reset --soft HEAD~1` and re-stage. Do not
-  force-amend a signed commit.
-- For multi-commit work (e.g. a roadmap task broken into 5
-  commits per the plan), do one commit at a time: stage,
-  check, show diff, run `git commit`, wait for the human to
-  confirm the signature, then move to the next commit. Do not
-  pre-stage the next commit's changes while waiting.
+- The agent runs `git commit` at most **once per staged
+  change.** If the invocation times out, errors, or appears
+  hung (no output, no prompt, no return), the agent does **not**
+  retry, loop, or `q`/Ctrl-C/EOF the shell. The agent stops,
+  reports the state, and waits for the human. The human can
+  recover by running `git commit` themselves, or by inspecting
+  the shell that the tool runner left open.
+
+**Sequence per commit (the agent follows this, no deviations):**
+
+1. Stage the files (`git add <path>`).
+2. Run `make check`. Report pass/fail.
+3. Show the staged diff (`git --no-pager diff --cached`).
+4. Print the proposed one-line `git commit -m '...'` command
+   verbatim, do not run it yet.
+5. Wait for the human to say "commit" (or equivalent).
+6. Run **exactly one** `git commit -m '<one-line message>'`.
+7. Stop. Do not push, do not stage the next commit, do not run
+   any further git commands. The human confirms the signature
+   in their own terminal before the next turn.
+
+**If a commit is malformed** (wrong message, missing file,
+wrong files staged): reset with `git reset --soft HEAD~1` and
+re-stage. Do not force-amend a signed commit.
+
+**For multi-commit work** (e.g. a roadmap task broken into 5
+commits per the plan), do one commit at a time per the
+sequence above. Do not pre-stage the next commit's changes
+while waiting.
 
 ## Plan mode
 

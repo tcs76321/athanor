@@ -140,6 +140,23 @@ New entries are appended at the top. Do not rewrite history.
   - `M3-T3: trim comparison winner; audit unknown-value downgrades` — `e6b487f`
   - `M3-T3: DecideWinner table tests for ties + boundaries` — `a5da467`
 
+- **M3-T4 (close-out, 3 commits).** Reflection phase
+  hardening: (1) the reflection counter is now a typed
+  `system_state` row (`reflect:counter:<job-id>`) instead
+  of co-opting `jobs.recovery_flag` with a `"reflect-N"`
+  string; the `engine.Run` `HasPrefix("reflect-")` guard
+  is gone (commit 4.1); (2) the budget is now a config
+  field (`execution.max_reflection_loops`, default 2) read
+  via `e.resolveMaxReflectionLoops` instead of a hard-coded
+  constant (commit 4.2); (3) `validateCross` rejects
+  non-positive `max_hard_task_variations` and
+  `max_reflection_loops` values at config load (commit
+  4.3). `make check` clean; Gates G1 + G2 re-proven.
+  Per-task commits:
+
+  - `M3-T4: typed reflection counter in system_state` — `6956a1f`
+  - `M3-T4: Execution.MaxReflectionLoops config field` — `dbe3478`
+
 ### M2 — Container Spine (continuing)
 
 - **M2-T6.** Security test suite closes Gate G2. Two layers: a

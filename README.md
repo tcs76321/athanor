@@ -144,7 +144,7 @@ Then watch it work in real time from the Watch View, or queue it and check the M
 
 ### What's next
 
-M3-T1, M3-T2, and M3-T3 are closed. M3-T4 (per-phase wall-time budget enforcement + typed reflection counter in `system_state`) is the next task. M3-T5 (git tool on `accepted`), M3-T6 (crash-recovery E2E: kill Core mid-diverging / mid-evaluating / mid-testing → resume correctly), and M3-T7 (the dialectical-vs-single-shot quality probe with calibration + stability + diversity measurements per the M3-T7-a/b/c backlog in `ROADMAP.md` §7) round out the milestone. Gate G3 closes after T6 passes. Architectural decisions for the M3-T2 and M3-T3 work are in [`docs/adr/0011`](docs/adr/0011-external-api-host-allowlist.md)–[`0014`](docs/adr/0014-evaluation-phase-move.md).
+M3-T1, M3-T2, M3-T3, and M3-T4 are closed. M3-T5 (git tool on `accepted`) is the next task. M3-T6 (crash-recovery E2E: kill Core mid-diverging / mid-evaluating / mid-testing → resume correctly), and M3-T7 (the dialectical-vs-single-shot quality probe with calibration + stability + diversity measurements per the M3-T7-a/b/c backlog in `ROADMAP.md` §7) round out the milestone. Gate G3 closes after T6 passes. Architectural decisions for the M3-T2 through M3-T4 work are in [`docs/adr/0011`](docs/adr/0011-external-api-host-allowlist.md)–[`0014`](docs/adr/0014-evaluation-phase-move.md).
 
 ### What's deferred
 

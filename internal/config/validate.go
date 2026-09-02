@@ -124,6 +124,20 @@ func validateCross(c *Config) error {
 	if _, ok := c.Personas.Role(c.Execution.JudgePersona); !ok {
 		return fmt.Errorf("execution.judge_persona %q is not a defined persona role", c.Execution.JudgePersona)
 	}
+	// M3-T4 commit 4.3: MaxHardTaskVariations must be ≥ 1
+	// when set. The §13 dialectical loop uses this as an
+	// upper bound on candidate count; a 0 or negative value
+	// is a config bug that the engine would silently swallow
+	// (its `if max > 0` guard in `phaseDivergeN` was the
+	// M3-T1 fix for the bad default, but a load-time check
+	// surfaces the typo with an actionable error). The
+	// reflection-loops sibling gets the same check.
+	if c.Execution.MaxHardTaskVariations < 1 {
+		return fmt.Errorf("execution.max_hard_task_variations must be ≥ 1, got %d", c.Execution.MaxHardTaskVariations)
+	}
+	if c.Execution.MaxReflectionLoops < 1 {
+		return fmt.Errorf("execution.max_reflection_loops must be ≥ 1, got %d", c.Execution.MaxReflectionLoops)
+	}
 	return nil
 }
 

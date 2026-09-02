@@ -39,6 +39,33 @@ func (a *Store) ListByProject(ctx context.Context, projectID string) ([]Artifact
 	return out, rows.Err()
 }
 
+// ListByJob returns the artifacts a single job
+// produced, in creation order (oldest first). M3-T1
+// follow-up (ROADMAP §7): the E1 dialectical-loop
+// test in `internal/engine/multicandidate_test.go`
+// previously ran `env.db.DB().QueryContext(...)`
+// directly to count proposal artifacts. Adding this
+// method routes the test through the typed store
+// and removes the raw SQL. The shape mirrors
+// `evaluation.Repo.ListByJob` (`internal/evaluation/repo.go`).
+func (a *Store) ListByJob(ctx context.Context, jobID string) ([]Artifact, error) {
+	rows, err := a.db.DB().QueryContext(ctx,
+		artifactSelect+` WHERE job_id = ? ORDER BY created_at ASC, id ASC`, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("listing artifacts by job: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Artifact
+	for rows.Next() {
+		art, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, art)
+	}
+	return out, rows.Err()
+}
+
 // LatestAcceptedByProject returns the project's most recently accepted
 // artifact, or ErrNotFound when the project has no accepted artifact
 // yet. Used by §13.1 Phase 6 (Comparing) to find the "previous" side

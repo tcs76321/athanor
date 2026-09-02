@@ -91,24 +91,17 @@ func TestRun_FullDialecticalChain_ThreeCandidates_CodeArchetype(t *testing.T) {
 	}
 
 	// Three candidate proposal artifacts persisted as `draft`.
-	proposalRows, err := env.db.DB().QueryContext(context.Background(),
-		`SELECT id, kind, status FROM artifacts WHERE job_id = ? ORDER BY kind, created_at`, jobID)
+	// Routed through `artifact.Store.ListByJob` (added in the
+	// M3-T1 follow-up) rather than raw SQL.
+	jobArtifacts, err := env.artifacts.ListByJob(context.Background(), jobID)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ListByJob: %v", err)
 	}
-	defer func() { _ = proposalRows.Close() }()
-	var proposalCount int
-	for proposalRows.Next() {
-		var id, kind, status string
-		if err := proposalRows.Scan(&id, &kind, &status); err != nil {
-			t.Fatalf("scanning proposal row: %v", err)
-		}
-		if kind == "proposal" {
+	proposalCount := 0
+	for _, a := range jobArtifacts {
+		if a.Kind == artifact.KindProposal {
 			proposalCount++
 		}
-	}
-	if err := proposalRows.Err(); err != nil {
-		t.Fatalf("iterating proposal rows: %v", err)
 	}
 	if proposalCount != 3 {
 		t.Errorf("proposal artifacts = %d, want 3", proposalCount)

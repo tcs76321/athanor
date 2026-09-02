@@ -10,6 +10,79 @@ New entries are appended at the top. Do not rewrite history.
 
 ## Unreleased
 
+### M3 follow-ups
+
+- **`Repository.Transition` race guard (`b9f0bee`).** When the
+  in-memory read observes the same state another writer just
+  committed (`current.State == to`), the function returns
+  `ErrConcurrentTransition` instead of `IllegalTransitionError`.
+  The §8.2 state machine has no self-loops, so the only way
+  this happens in production is a race; the loser of two
+  concurrent transitions now consistently sees the race error
+  rather than a self-loop error. The pure `ValidateTransition`
+  function is unchanged (its `state_test.go` self-loop
+  assertions still hold). Sibling test
+  `TestConcurrentTransition_DifferentTargetsRacesCAS`
+  exercises the SQL CAS branch on a different-target race so
+  both layers are pinned.
+
+- **`MinJudgeConfidence = 0` end-to-end (`174f3a4`).** The
+  §19.3 deterministic guard is now reachable as a disabled
+  mode through config. The field is now `*float64` (mirroring
+  the existing `*bool` pattern) so the operator can
+  distinguish "unset" (use the default 0.7) from "explicitly
+  zero" (disable). A previous version of
+  `internal/engine/compare.go` overrode an explicit 0 back to
+  0.7 inside the engine, making the disabled mode unreachable;
+  that override was removed and the rescue in
+  `internal/config/defaults.go` was updated to honor the
+  pointer. New helper `Execution.MinJudge()` returns the
+  resolved float64 with the default applied. Tests in
+  `internal/engine/compare_threshold_test.go` (end-to-end
+  through `phaseCompare`) and `internal/config/config_test.go`
+  (load layer in isolation) pin the contract in both layers.
+
+- **Dormant `Execution` flags marked deferred (`f309500`).**
+  `require_tests_for_code`, `require_documentation_for_code`,
+  and `compare_before_accept` are declared + defaulted to
+  `true` so the shipped example config validates and parses,
+  but the engine does not yet consult them. Operators who
+  set any of these to `false` today will see no behavior
+  change; they become effective in M6/M7. The deferral is
+  documented inline in `config.example.yaml` and
+  `ARCHITECTURE.md` so operators are not silently lied to.
+
+- **`e.cfg` nil guards in engine (`834b8a8`).** Defensive
+  `e.cfg == nil` checks added in `phaseCompare`,
+  `phaseDivergeN`, and the engine's `call` helper, matching
+  the existing guard in `resolveMaxReflectionLoops`. No
+  production path constructs an Engine with `nil` cfg, so
+  this is purely defensive consistency; the guards surface a
+  clear error rather than a nil-pointer panic if a future
+  caller makes that mistake.
+
+- **`DecideWinner` always returns non-empty `Reasons`
+  (`7b787d5`).** The pure function now appends a one-line
+  engine annotation to the `Reasons` slice on every branch
+  (disabled, no-record, satisfied, downgrade). The `comparison`
+  audit row the engine writes is then guaranteed to have
+  something to read in a post-mortem, even when the LLM
+  returned an empty `reasons` array. Existing
+  `TestDecideWinner` table tests still pass; the new
+  `TestDecideWinner_ReasonsAlwaysNonEmpty` pins the
+  post-mortem-readability contract across all five branches.
+
+- **Integration-test gating documented (`ccbda5c`).** A new
+  "Integration (behavioral) security probes" section in
+  `DEVELOPMENT.md` explains why the five behavioral probes
+  in `internal/jobpod/security_test.go` are gated by
+  `ATHANOR_RUN_INTEGRATION=1` and skipped in CI. The
+  structural argv regression test and the LLM-isolation
+  tests run in CI; the integration probes run on a
+  developer's machine with a real `podman` runtime. The
+  reference run on 2026-08-30 (macOS 14 / podman 5.8.2 /
+  applehv) passed all five.
+
 ### M3 — Dialectical Loop v1 (started)
 
 - **M3-T1 (close-out, `62ae865`).** Four follow-up fixes landed

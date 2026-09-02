@@ -1508,6 +1508,12 @@ execution:
   divergence_candidates: 3
   max_hard_task_variations: 10
   judge_persona: security
+  # The three flags below (require_tests_for_code,
+  # require_documentation_for_code, compare_before_accept)
+  # are M3-deferred: declared and defaulted to true, but the
+  # engine does not yet consult them. Operators who set any
+  # of these to false today will see no behavior change. They
+  # become effective in M6/M7. See ROADMAP §7.
   require_tests_for_code: true
   require_documentation_for_code: true
   compare_before_accept: true

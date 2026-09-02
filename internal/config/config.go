@@ -167,6 +167,16 @@ type Execution struct {
 	MaxHardTaskVariations       int                 `yaml:"max_hard_task_variations"`
 	MaxReflectionLoops          int                 `yaml:"max_reflection_loops"`
 	JudgePersona                string              `yaml:"judge_persona"`
+	// The three flags below are M3-deferred: declared and
+	// defaulted to true so the shipped example config validates
+	// and parses, but the engine does not yet consult them.
+	// Operators who set any of these to false today will see
+	// no behavior change. They become effective in M6/M7. See
+	// ROADMAP §7 and the M3 close-out entry that documents
+	// the deferral. The pointer types are used so the
+	// defaults package can distinguish "unset" (apply true)
+	// from "explicitly false" (still no behavior change in
+	// M3, but the field shape is ready for M6/M7 to read).
 	RequireTestsForCode         *bool               `yaml:"require_tests_for_code"`
 	RequireDocumentationForCode *bool               `yaml:"require_documentation_for_code"`
 	CompareBeforeAccept         *bool               `yaml:"compare_before_accept"`

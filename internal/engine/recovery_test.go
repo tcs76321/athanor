@@ -115,6 +115,156 @@ func TestRecoverResumesMidFlightJob(t *testing.T) {
 	t.Fatal("job never completed after recovery")
 }
 
+// TestRecoverResumesJob_MidDiverging (M3-T6 commit 6.1)
+// simulates a crash in StateDiverging. Each divergence
+// phase call is atomic (one phase call produces N
+// candidates and transitions in one step), so the
+// "mid-phase" test is necessarily "phase entered but
+// not yet completed" — the job sits in StateDiverging
+// with zero candidate artifacts. Recovery must resume
+// the job and complete the divergence phase.
+func TestRecoverResumesJob_MidDiverging(t *testing.T) {
+	env := newEnv(t)
+	jobID := env.submit(t)
+
+	// Drive to StateDiverging. The next stepOnce would
+	// complete the divergence phase and transition, so we
+	// crash here, before that step.
+	for {
+		cur, err := env.jobs.Get(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cur.State == job.StateDiverging {
+			break
+		}
+		if cur.State.Terminal() {
+			t.Fatalf("job reached %s before diverging", cur.State)
+		}
+		if err := stepOnce(env.eng, jobID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cur, err := env.jobs.Get(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.State != job.StateDiverging {
+		t.Fatalf("crash point state = %s, want diverging", cur.State)
+	}
+
+	if err := env.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, err := store.Open(env.db.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db2.Close() })
+	jobs2 := job.NewRepository(db2)
+	artifacts2 := artifact.NewStore(db2, filepath.Join(filepath.Dir(env.db.Path()), "artifacts"))
+	freezer2, _ := control.NewKillSwitch(db2)
+	registry, _ := llm.NewRegistry(env.cfg.Personas)
+	eng2 := New(env.cfg, db2, jobs2, project.NewRepo(db2), artifacts2,
+		evaluation.NewRepo(db2),
+		llm.NewClient(env.cfg.Inference.OllamaURL, nil), registry, freezer2, power.NewPowerManager(nil), newFakeRunner())
+	eng2.Recover(context.Background())
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		final, err := jobs2.Get(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if final.State == job.StateCompleted {
+			proposals, err := artifacts2.ListByProject(context.Background(), cur.ProjectID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, p := range proposals {
+				if p.JobID == jobID && p.Kind == artifact.KindProposal {
+					count++
+				}
+			}
+			if count < 1 {
+				t.Errorf("proposal artifacts for job = %d, want ≥ 1", count)
+			}
+			return
+		}
+		if final.State == job.StateFailed {
+			t.Fatalf("job failed after recovery, want completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job never completed after mid-diverging recovery")
+}
+
+// TestRecoverResumesJob_MidEvaluating (M3-T6 commit 6.1)
+// simulates a crash in StateEvaluating. Each evaluating
+// phase call is atomic (one phase call evaluates all
+// candidates and transitions), so the "mid-phase" test
+// is "phase entered but not yet completed" — the job
+// sits in StateEvaluating with zero evaluation records.
+// Recovery must resume the job and complete the
+// evaluating phase.
+func TestRecoverResumesJob_MidEvaluating(t *testing.T) {
+	env := newEnv(t)
+	jobID := env.submit(t)
+
+	// Drive to StateEvaluating. The next stepOnce would
+	// complete the evaluating phase and transition, so we
+	// crash here, before that step.
+	for {
+		cur, err := env.jobs.Get(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cur.State == job.StateEvaluating {
+			break
+		}
+		if cur.State.Terminal() {
+			t.Fatalf("job reached %s before evaluating", cur.State)
+		}
+		if err := stepOnce(env.eng, jobID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := env.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, err := store.Open(env.db.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db2.Close() })
+	jobs2 := job.NewRepository(db2)
+	artifacts2 := artifact.NewStore(db2, filepath.Join(filepath.Dir(env.db.Path()), "artifacts"))
+	eval2 := evaluation.NewRepo(db2)
+	freezer2, _ := control.NewKillSwitch(db2)
+	registry, _ := llm.NewRegistry(env.cfg.Personas)
+	eng2 := New(env.cfg, db2, jobs2, project.NewRepo(db2), artifacts2, eval2,
+		llm.NewClient(env.cfg.Inference.OllamaURL, nil), registry, freezer2, power.NewPowerManager(nil), newFakeRunner())
+	eng2.Recover(context.Background())
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		final, err := jobs2.Get(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if final.State == job.StateCompleted {
+			return
+		}
+		if final.State == job.StateFailed {
+			t.Fatalf("job failed after mid-evaluating recovery, want completed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("job never completed after mid-evaluating recovery")
+}
+
 // TestRecoverResumesJob_ArtifactWrittenBeforeTransition (M1-T8.3) covers
 // the narrow atomicity window in phaseSynthesize: the final-kind
 // artifact row and content file exist on disk, but the state

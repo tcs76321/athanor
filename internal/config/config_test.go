@@ -57,6 +57,9 @@ func TestLoadValidMinimalAppliesDefaults(t *testing.T) {
 	if cfg.Execution.DivergenceCandidates != 3 {
 		t.Errorf("DivergenceCandidates default = %d", cfg.Execution.DivergenceCandidates)
 	}
+	if cfg.Execution.MaxReflectionLoops != 2 {
+		t.Errorf("MaxReflectionLoops default = %d, want 2", cfg.Execution.MaxReflectionLoops)
+	}
 	if cfg.Execution.JudgePersona != "security" {
 		t.Errorf("JudgePersona default = %q", cfg.Execution.JudgePersona)
 	}

@@ -165,6 +165,7 @@ type ContextEngine struct {
 type Execution struct {
 	DivergenceCandidates        int                 `yaml:"divergence_candidates"`
 	MaxHardTaskVariations       int                 `yaml:"max_hard_task_variations"`
+	MaxReflectionLoops          int                 `yaml:"max_reflection_loops"`
 	JudgePersona                string              `yaml:"judge_persona"`
 	RequireTestsForCode         *bool               `yaml:"require_tests_for_code"`
 	RequireDocumentationForCode *bool               `yaml:"require_documentation_for_code"`

@@ -15,12 +15,30 @@ import (
 )
 
 // M3-T1 deliberate simplification: the reflection-loop budget is
-// hard-coded to 2 iterations. M3-T4 owns the config field
-// (`execution.max_reflection_loops`) and the typed counter in
-// `system_state` for budget-exhausted escalation; the constant
-// below is the M3-T1 placeholder that keeps the engine's
-// branch logic in place while the configurability is built out.
+// hard-coded to 2 iterations. M3-T4 commit 4.2 moved this to
+// a config field (`execution.max_reflection_loops`); the
+// default lives in `internal/config/defaults.go` and is
+// applied via `applyDefaults`. The engine reads it via
+// `e.cfg.Execution.MaxReflectionLoops`, falling back to
+// 2 when the field is zero (defensive — defaults.go
+// should always set it).
+//
+// The constant below is kept only so existing call sites
+// and tests that reference `maxReflectionIterations`
+// continue to compile; it is not the source of truth.
 const maxReflectionIterations = 2
+
+// resolveMaxReflectionLoops reads the budget from
+// config, falling back to 2 when the field is zero. A
+// zero config value is treated as "not set" because the
+// config default function in `defaults.go` should have
+// filled it; this fallback is defensive.
+func (e *Engine) resolveMaxReflectionLoops() int {
+	if e.cfg == nil || e.cfg.Execution.MaxReflectionLoops <= 0 {
+		return maxReflectionIterations
+	}
+	return e.cfg.Execution.MaxReflectionLoops
+}
 
 // reflectCounterPrefix is the `system_state` key prefix
 // for the typed reflection counter that M3-T4 commit 4.1
@@ -108,19 +126,16 @@ func (e *Engine) phaseReflect(ctx context.Context, j job.Job) error {
 
 	// M3-T4 commit 4.1: the reflection counter now lives in
 	// `system_state` (`reflect:counter:<job-id>`), no longer
-	// co-opted from `jobs.recovery_flag`. The re-fetch dance
-	// the M3-T1 close-out added (`engine.go` re-fetches the
-	// Job in case a previous reflection iteration set the
-	// flag) is gone: the typed counter is read at the
-	// top of the phase, the M3-T1 close-out's
-	// `HasPrefix("reflect-")` guard in `engine.Run` can
-	// be removed in a follow-up commit.
+	// co-opted from `jobs.recovery_flag`. M3-T4 commit 4.2:
+	// the budget is read from `cfg.Execution.MaxReflectionLoops`
+	// with a 2 default.
+	max := e.resolveMaxReflectionLoops()
 	iter := e.getReflectCounter(ctx, j.ID)
-	if iter >= maxReflectionIterations {
+	if iter >= max {
 		e.audit(ctx, j.ID, map[string]any{
 			"event":     "reflection_budget_exhausted",
 			"iter":      iter,
-			"max":       maxReflectionIterations,
+			"max":       max,
 			"archetype": p.Archetype,
 		})
 		_, err = e.jobs.Transition(ctx, j.ID, job.StateFailed)
@@ -149,19 +164,19 @@ func (e *Engine) phaseReflect(ctx context.Context, j job.Job) error {
 
 	// Bump the typed counter. The check below enforces the
 	// budget BEFORE re-entering divergence: if the upcoming
-	// iteration would exceed `maxReflectionIterations`, we
-	// transition to `failed` now rather than waste another
-	// divergence + evaluation cycle that we already know will
-	// not count toward a passing job.
+	// iteration would exceed `max`, we transition to
+	// `failed` now rather than waste another divergence +
+	// evaluation cycle that we already know will not count
+	// toward a passing job.
 	nextIter := iter + 1
 	if serr := e.setReflectCounter(ctx, j.ID, nextIter); serr != nil {
 		slog.Warn("engine: bumping reflection counter", "err", serr)
 	}
-	if nextIter >= maxReflectionIterations {
+	if nextIter >= max {
 		e.audit(ctx, j.ID, map[string]any{
 			"event":     "reflection_budget_exhausted",
 			"iter":      nextIter,
-			"max":       maxReflectionIterations,
+			"max":       max,
 			"archetype": p.Archetype,
 		})
 		_, err = e.jobs.Transition(ctx, j.ID, job.StateFailed)

@@ -83,6 +83,14 @@ func applyDefaults(c *Config) {
 
 	setInt(&c.Execution.DivergenceCandidates, 3)
 	setInt(&c.Execution.MaxHardTaskVariations, 10)
+	// M3-T4 commit 4.2: the reflection-loop budget was a
+	// hard-coded `maxReflectionIterations = 2` constant in
+	// `internal/engine/reflect.go` since M3-T1. It is now
+	// a config field; the engine reads it via
+	// `cfg.Execution.MaxReflectionLoops` with a 2 default
+	// to keep the M3-T1 behavior bit-identical when no
+	// config is supplied.
+	setInt(&c.Execution.MaxReflectionLoops, 2)
 	setStr(&c.Execution.JudgePersona, "security")
 	setTrue(&c.Execution.RequireTestsForCode)
 	setTrue(&c.Execution.RequireDocumentationForCode)

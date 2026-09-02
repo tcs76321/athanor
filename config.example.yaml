@@ -74,6 +74,7 @@ context_engine:
 execution:
   divergence_candidates: 3
   max_hard_task_variations: 10
+  max_reflection_loops: 2
   judge_persona: security
   require_tests_for_code: true
   require_documentation_for_code: true

@@ -10,6 +10,64 @@ New entries are appended at the top. Do not rewrite history.
 
 ## Unreleased
 
+### M4 — Airlock & Gateway (started)
+
+- **M4-T1 (`5f829b7`).** Path containment library at
+  `internal/airlock/paths`. Three layers: `Resolve` (path
+  arithmetic — absolute, traversal, NULL bytes), `Validate`
+  (mode + structural — device/FIFO, setuid/setgid, symlink
+  escape, unexpected executable), and `OpenNoFollow` (kernel —
+  `O_NOFOLLOW` defeats a symlink at the final component,
+  closing the Lstat→open TOCTOU window). The `O_NOFOLLOW`
+  constant is reached through build-tag-gated wrappers
+  (`paths_linux.go`, `paths_darwin.go`) that are the only
+  files in `internal/` permitted to import `syscall`, gated
+  by Gate G1's rule 5 (added in `54d8d7c`). The
+  cross-platform fallback `paths_other.go` does not import
+  `syscall` and emits a documented warning on unsupported
+  GOOSes — the build, not the runtime, is the source of
+  truth for which platforms get the kernel-level defense.
+  `TestAdversarialCorpus` is the table-driven proof that
+  every rejection class in `errors.go` is reachable from
+  documented inputs (absolute path, traversal up, traversal
+  via subdir, NULL byte, escape symlink, device FIFO, setuid,
+  setgid, executable by default, executable with
+  `AllowExecutable`, legal file, legal nested file, inner
+  symlink with a legal target, missing with `AllowMissing`,
+  missing without `AllowMissing`). The setuid / setgid rows
+  self-skip on hosts whose filesystem silently drops the
+  bit on `chmod` (notably macOS user directories); the
+  probes are `modeReportsSetUID` / `modeReportsSetGID` in
+  `paths_helpers_test.go`, and the production code is
+  unchanged. `TestResolveRejectsUnsafeInputs` is a
+  `testing/quick` property test (200 random samples) that
+  asserts every (root, rel) input with `rel` starting with
+  `/` or `..` returns `ErrAbsolute` or `ErrTraversal`.
+  `TestResolveRoundTrip` asserts every legal (root, rel)
+  pair produces a path in canonical `Clean` form that
+  starts with `root`. `TestOpenNoFollowRejectsFinalComponentSymlink`
+  is the behavioral test for the kernel-level defense
+  (skips on GOOSes where `noFollowFlag` returns 0). Reference
+  run on macOS 14, `make check`: `golangci-lint` 0 issues,
+  `go vet` clean, `go test -race ./...` all green; Gate G1
+  re-proven (`internal/gate/gate_test.go`).
+- **Gate G1 rule 5 (`54d8d7c`).** Preparatory commit for
+  M4-T1: Gate G1's AST walk now allowlists
+  `internal/airlock/paths/paths_linux.go` and
+  `internal/airlock/paths/paths_darwin.go` (full
+  repo-relative path, not basename, so a future contributor
+  cannot create an unannotated
+  `internal/somethingelse/paths_linux.go` and slip through)
+  and `allowedInternalSyscallIdents` is a closed set
+  containing exactly one identifier, `O_NOFOLLOW`. The gate
+  walks every `syscall.X` selector in those two files and
+  asserts it is allowlisted — the same shape as the cmd/
+  signal-constant check, applied to `internal/`. The
+  `gate_relpath_test.go` companion pins the `relPath`
+  helper's normalization contract and the sorted
+  `allowedInternalSyscallIdentsKeyList` output. The actual
+  library ships in `5f829b7`.
+
 ### M3 follow-ups
 
 - **`Repository.Transition` race guard (`b9f0bee`).** When the

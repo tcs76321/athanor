@@ -70,6 +70,7 @@ type Config struct {
 	Backup           Backup           `yaml:"backup"`
 	Logging          Logging          `yaml:"logging"`
 	JobPod           JobPod           `yaml:"job_pod"`
+	Airlock          Airlock          `yaml:"airlock"`
 
 	// SourcePath is set by Load and records where the config came from.
 	SourcePath string `yaml:"-"`
@@ -325,4 +326,52 @@ func (c *Config) JobPodResourceLimits() jobpod.Limits {
 		MemoryMB:  c.JobPod.MemoryMB,
 		CPUs:      c.JobPod.CPUs,
 	}
+}
+
+// Airlock configures the §21.3 file-airlock pipeline (ROADMAP M4-T2/T3/T4;
+// ADR-0015). The block is the per-pipeline scanner selection plus the
+// numeric thresholds the in-tree scanners (size, zipbomb, prompt-injection
+// heuristic) consult. The "scanner absent" failure mode is uniform across
+// all three pipeline lists: a named scanner the registry cannot instantiate
+// (e.g. "clamav" without a clamdscan binary on PATH) degrades to
+// VerdictUncertain at scan time, so the pipeline fails closed.
+//
+// Scanners is a per-pipeline list because the three choke points are
+// asymmetric on purpose (see ADR-0015 §"Trust boundaries, not all text"):
+//
+//   - Ingress: full set (heuristic + size + zipbomb + clamav + yara)
+//   - Egress: never prompt-injection-scanned (LLM-generated data)
+//   - UserPrompt: only the heuristic, only for prompts over the threshold
+//
+// MaxIngressBytes, MaxUncompressedRatio, MaxZipEntries are the §21.3
+// numeric limits applied by the in-tree `size` and `zipbomb` scanners.
+// PromptInjectionLongUserPromptThresholdBytes and
+// PromptInjectionScanLongUserPrompts gate the goal-submit heuristic
+// (default-on, 2 KiB threshold; see ADR-0015 §"Defense in depth at every
+// crossing").
+//
+// YaraRuleSet is the path (relative to stateDir or absolute) the in-tree
+// YARA adapter loads rules from. Empty string disables the rule set;
+// the adapter then reports `Available() == false` and degrades.
+type Airlock struct {
+	Enabled                                *bool    `yaml:"enabled"`
+	Scanners                               AirlockScanners `yaml:"scanners"`
+	MaxIngressBytes                        int64    `yaml:"max_ingress_bytes"`
+	MaxUncompressedRatio                   int      `yaml:"max_uncompressed_ratio"`
+	MaxZipEntries                          int      `yaml:"max_zip_entries"`
+	PromptInjectionLongUserPromptThresholdBytes int  `yaml:"prompt_injection_long_user_prompt_threshold_bytes"`
+	PromptInjectionScanLongUserPrompts     *bool    `yaml:"prompt_injection_scan_long_user_prompts"`
+	YaraRuleSet                            string   `yaml:"yara_rule_set"`
+}
+
+// AirlockScanners is the per-pipeline scanner list. Each entry is a
+// registered scanner name (the closed set is documented in
+// internal/airlock/scanner; M4-T3 expands the package). An empty list
+// is a valid configuration: a pipeline with no scanners accepts
+// everything, which is the safe default for tests that exercise the
+// pipeline wiring without the scanner implementations.
+type AirlockScanners struct {
+	Ingress    []string `yaml:"ingress"`
+	Egress     []string `yaml:"egress"`
+	UserPrompt []string `yaml:"user_prompt"`
 }

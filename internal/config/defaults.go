@@ -174,6 +174,59 @@ func applyDefaults(c *Config) {
 	if c.JobPod.DefaultTools == nil {
 		c.JobPod.DefaultTools = []string{}
 	}
+
+	// Airlock defaults (M4-T2/T3/T4; ADR-0015). The pipeline
+	// lists are the closed set shipped in M4-T3; a typo in
+	// a user config is rejected at construction (the
+	// registry's NewRegistry errors on unknown in-tree names).
+	// Egress intentionally omits prompt-injection scanners
+	// — LLM-generated data, scanning is a category error.
+	// UserPrompt runs the heuristic only; size/zipbomb are
+	// not meaningful on a string. The numeric thresholds
+	// (100 MiB ingress, 100x decompression, 10k zip entries,
+	// 2 KiB long-prompt threshold) are the §21.3 numbers in
+	// the ROADMAP M4-T4 acceptance criterion; the
+	// `prompt_injection_scan_long_user_prompts` default is
+	// true (defense-by-default; the operator can opt out).
+	setTrue(&c.Airlock.Enabled)
+	if c.Airlock.Scanners.Ingress == nil {
+		c.Airlock.Scanners.Ingress = []string{
+			"prompt-injection-heuristic",
+			"size",
+			"zipbomb",
+			"clamav",
+			"yara",
+		}
+	}
+	if c.Airlock.Scanners.Egress == nil {
+		c.Airlock.Scanners.Egress = []string{
+			"size",
+			"zipbomb",
+			"clamav",
+			"yara",
+		}
+	}
+	if c.Airlock.Scanners.UserPrompt == nil {
+		c.Airlock.Scanners.UserPrompt = []string{
+			"prompt-injection-heuristic",
+		}
+	}
+	if c.Airlock.MaxIngressBytes == 0 {
+		c.Airlock.MaxIngressBytes = 104857600 // 100 MiB
+	}
+	if c.Airlock.MaxUncompressedRatio == 0 {
+		c.Airlock.MaxUncompressedRatio = 100
+	}
+	if c.Airlock.MaxZipEntries == 0 {
+		c.Airlock.MaxZipEntries = 10000
+	}
+	if c.Airlock.PromptInjectionLongUserPromptThresholdBytes == 0 {
+		c.Airlock.PromptInjectionLongUserPromptThresholdBytes = 2048
+	}
+	setTrue(&c.Airlock.PromptInjectionScanLongUserPrompts)
+	if c.Airlock.YaraRuleSet == "" {
+		c.Airlock.YaraRuleSet = "state/yara/injection.yar"
+	}
 }
 
 func defaultPersona(p *PersonaConfig, model string, ctx int, temp float64) {

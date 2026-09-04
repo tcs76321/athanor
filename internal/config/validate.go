@@ -152,6 +152,27 @@ func validateCross(c *Config) error {
 	if c.Execution.MaxReflectionLoops < 1 {
 		return fmt.Errorf("execution.max_reflection_loops must be ≥ 1, got %d", c.Execution.MaxReflectionLoops)
 	}
+	// M4-T2/T3/T4 (ADR-0015): the airlock thresholds are
+	// post-default values (validateCross runs after applyDefaults).
+	// MaxIngressBytes must be positive; the ratios and
+	// thresholds must be positive. The pipeline lists are
+	// not validated here: the closed set lives in
+	// internal/airlock/scanner, which errors at registry
+	// construction on an unknown in-tree name. Keeping the
+	// registry as the single source of truth means adding
+	// a scanner name does not require editing this file.
+	if c.Airlock.MaxIngressBytes <= 0 {
+		return fmt.Errorf("airlock.max_ingress_bytes must be positive, got %d", c.Airlock.MaxIngressBytes)
+	}
+	if c.Airlock.MaxUncompressedRatio < 1 {
+		return fmt.Errorf("airlock.max_uncompressed_ratio must be ≥ 1, got %d", c.Airlock.MaxUncompressedRatio)
+	}
+	if c.Airlock.MaxZipEntries < 1 {
+		return fmt.Errorf("airlock.max_zip_entries must be ≥ 1, got %d", c.Airlock.MaxZipEntries)
+	}
+	if c.Airlock.PromptInjectionLongUserPromptThresholdBytes < 1 {
+		return fmt.Errorf("airlock.prompt_injection_long_user_prompt_threshold_bytes must be ≥ 1, got %d", c.Airlock.PromptInjectionLongUserPromptThresholdBytes)
+	}
 	return nil
 }
 

@@ -442,3 +442,95 @@ func TestJobPod_EnvelopeAcceptsKnown(t *testing.T) {
 		t.Errorf("envelope = %v, want both tools allowed", env.Tools())
 	}
 }
+
+// TestAirlock_DefaultsPerPipeline (M4-T2/T3/T4; ADR-0015) pins the
+// per-pipeline scanner selection. Egress must never carry a
+// prompt-injection scanner name (LLM-generated data; the category
+// is wrong). The numeric thresholds are the §21.3 numbers in the
+// ROADMAP M4-T4 acceptance criterion. The companion
+// TestExampleConfigMatchesDefaults catches drift between the
+// example and the defaults; this test catches drift between the
+// defaults and the ADR's design intent.
+func TestAirlock_DefaultsPerPipeline(t *testing.T) {
+	def, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !Val(def.Airlock.Enabled, false) {
+		t.Errorf("airlock.enabled default = false, want true (defense-by-default)")
+	}
+	wantIngress := []string{"prompt-injection-heuristic", "size", "zipbomb", "clamav", "yara"}
+	if !reflect.DeepEqual(def.Airlock.Scanners.Ingress, wantIngress) {
+		t.Errorf("airlock.scanners.ingress default = %v, want %v", def.Airlock.Scanners.Ingress, wantIngress)
+	}
+	wantEgress := []string{"size", "zipbomb", "clamav", "yara"}
+	if !reflect.DeepEqual(def.Airlock.Scanners.Egress, wantEgress) {
+		t.Errorf("airlock.scanners.egress default = %v, want %v", def.Airlock.Scanners.Egress, wantEgress)
+	}
+	for _, name := range def.Airlock.Scanners.Egress {
+		if strings.HasPrefix(name, "prompt-injection-") {
+			t.Errorf("egress pipeline must not carry a prompt-injection scanner (ADR-0015), got %q", name)
+		}
+	}
+	wantUserPrompt := []string{"prompt-injection-heuristic"}
+	if !reflect.DeepEqual(def.Airlock.Scanners.UserPrompt, wantUserPrompt) {
+		t.Errorf("airlock.scanners.user_prompt default = %v, want %v", def.Airlock.Scanners.UserPrompt, wantUserPrompt)
+	}
+	if def.Airlock.MaxIngressBytes != 104857600 {
+		t.Errorf("airlock.max_ingress_bytes default = %d, want 104857600 (100 MiB)", def.Airlock.MaxIngressBytes)
+	}
+	if def.Airlock.MaxUncompressedRatio != 100 {
+		t.Errorf("airlock.max_uncompressed_ratio default = %d, want 100", def.Airlock.MaxUncompressedRatio)
+	}
+	if def.Airlock.MaxZipEntries != 10000 {
+		t.Errorf("airlock.max_zip_entries default = %d, want 10000", def.Airlock.MaxZipEntries)
+	}
+	if def.Airlock.PromptInjectionLongUserPromptThresholdBytes != 2048 {
+		t.Errorf("airlock.prompt_injection_long_user_prompt_threshold_bytes default = %d, want 2048 (2 KiB)", def.Airlock.PromptInjectionLongUserPromptThresholdBytes)
+	}
+	if !Val(def.Airlock.PromptInjectionScanLongUserPrompts, false) {
+		t.Errorf("airlock.prompt_injection_scan_long_user_prompts default = false, want true (defense-by-default)")
+	}
+	if def.Airlock.YaraRuleSet != "state/yara/injection.yar" {
+		t.Errorf("airlock.yara_rule_set default = %q, want state/yara/injection.yar", def.Airlock.YaraRuleSet)
+	}
+}
+
+// TestAirlock_RejectsZeroThresholds (M4-T2/T3/T4) proves the
+// post-default validateCross checks reject zero/negative
+// thresholds. A typo that sets max_ingress_bytes to a negative
+// value must surface as an error, not silently default-fill.
+// (A literal 0 is treated as "unset" by the existing setInt
+// helper, matching the pattern used elsewhere in the config
+// — this is a deliberate choice; the validateRaw path is the
+// right place to add a "reject explicit 0" check if we ever
+// need it.)
+func TestAirlock_RejectsZeroThresholds(t *testing.T) {
+	bad := []byte("airlock:\n  max_ingress_bytes: -1\n")
+	_, err := Parse(bad)
+	if err == nil {
+		t.Fatal("Parse with negative max_ingress_bytes returned nil; want a validation error")
+	}
+	if !strings.Contains(err.Error(), "airlock.max_ingress_bytes") {
+		t.Errorf("error %q does not mention the failing field", err.Error())
+	}
+}
+
+// TestAirlock_RejectsNegativeRatio (M4-T2/T3/T4) proves the
+// ratio floor is ≥ 1, not just positive. A negative ratio would
+// make the zipbomb scanner fail its `> ratio` check on every
+// file, which is a denial-of-service vector. (A literal 0 is
+// treated as "unset" by the existing setInt helper, so the
+// post-default check only fires for explicitly-negative values;
+// the validateRaw path is the right place to add a "reject
+// explicit 0" check if we ever need it.)
+func TestAirlock_RejectsNegativeRatio(t *testing.T) {
+	bad := []byte("airlock:\n  max_uncompressed_ratio: -5\n")
+	_, err := Parse(bad)
+	if err == nil {
+		t.Fatal("Parse with negative ratio returned nil; want a validation error")
+	}
+	if !strings.Contains(err.Error(), "airlock.max_uncompressed_ratio") {
+		t.Errorf("error %q does not mention the failing field", err.Error())
+	}
+}

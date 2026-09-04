@@ -491,8 +491,15 @@ func TestAirlock_DefaultsPerPipeline(t *testing.T) {
 	if !Val(def.Airlock.PromptInjectionScanLongUserPrompts, false) {
 		t.Errorf("airlock.prompt_injection_scan_long_user_prompts default = false, want true (defense-by-default)")
 	}
-	if def.Airlock.YaraRuleSet != "state/yara/injection.yar" {
-		t.Errorf("airlock.yara_rule_set default = %q, want state/yara/injection.yar", def.Airlock.YaraRuleSet)
+	// airlock.yara_rule_set defaults to empty; the cmd
+	// layer materializes the in-tree baseline ruleset
+	// to <state-dir>/yara/injection.yar on boot. An
+	// operator who wants a private rule set overrides
+	// the field in config.yaml. The default is empty
+	// rather than a path so the daemon never accidentally
+	// reads a stale state-dir file at the wrong version.
+	if def.Airlock.YaraRuleSet != "" {
+		t.Errorf("airlock.yara_rule_set default = %q, want empty (cmd materializes the embedded baseline)", def.Airlock.YaraRuleSet)
 	}
 }
 

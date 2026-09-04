@@ -224,9 +224,13 @@ func applyDefaults(c *Config) {
 		c.Airlock.PromptInjectionLongUserPromptThresholdBytes = 2048
 	}
 	setTrue(&c.Airlock.PromptInjectionScanLongUserPrompts)
-	if c.Airlock.YaraRuleSet == "" {
-		c.Airlock.YaraRuleSet = "state/yara/injection.yar"
-	}
+	// YaraRuleSet is left empty by default; the cmd
+	// layer materializes the in-tree baseline ruleset
+	// (scanner.DefaultYARARules) to <state-dir>/yara/.
+	// Operators override by setting this field to a
+	// private rule file's path; the cmd layer honors
+	// the override verbatim. An empty string + an
+	// absent binary = VerdictUncertain (fail-closed).
 }
 
 func defaultPersona(p *PersonaConfig, model string, ctx int, temp float64) {

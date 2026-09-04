@@ -184,6 +184,7 @@ func run(configPath, addr, stateDir string) error {
 			MaxIngressBytes:      cfg.Airlock.MaxIngressBytes,
 			MaxUncompressedRatio: cfg.Airlock.MaxUncompressedRatio,
 			MaxZipEntries:        cfg.Airlock.MaxZipEntries,
+			YaraRuleSet:          cfg.Airlock.YaraRuleSet,
 		},
 		slog.Default(),
 	)

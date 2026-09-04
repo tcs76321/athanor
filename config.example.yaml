@@ -222,8 +222,11 @@ airlock:
   # check.
   prompt_injection_long_user_prompt_threshold_bytes: 2048
   prompt_injection_scan_long_user_prompts: true
-  # Path to the YARA rule set loaded by the in-tree YARA
-  # adapter (M4-T3). Empty string disables the adapter; the
-  # scanner then reports `Available() == false` and degrades
-  # to VerdictUncertain.
-  yara_rule_set: "state/yara/injection.yar"
+  # Path to a private YARA rule set. Leave empty (the
+  # default) to use the in-tree baseline ruleset
+  # (embedded in the daemon binary, materialized to
+  # <state-dir>/yara/injection.yar on boot). Set to an
+  # absolute path to use a hardened private rule set
+  # instead. An empty string + an absent `yara` binary
+  # = VerdictUncertain (fail-closed).
+  yara_rule_set: ""

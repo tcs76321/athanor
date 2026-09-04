@@ -107,8 +107,27 @@ var allowedSyscallIdents = map[string]bool{
 // the `podman` binary. The gate still forbids os/exec in internal/
 // and in any other cmd/ file; this list is the named exception, not
 // a general permission.
+//
+// M4-T3 adds the scanner adapters in cmd/athanor/scanners/
+// (ClamAV, YARA) which legitimately shell out to external
+// binaries. The package is a directory, not a single file; the
+// per-file allowlist is augmented with `allowedOsExecDirs` so
+// adding a new adapter under cmd/athanor/scanners/ requires
+// only a one-line entry in `allowedOsExecDirs`, not edits to
+// this map. The dirs map is keyed on the full repo-relative
+// path so a future contributor cannot create a sibling
+// directory and slip through.
 var allowedOsExecFiles = map[string]bool{
 	"jobpod_client.go": true,
+}
+
+// allowedOsExecDirs are the directories in cmd/ under which
+// every Go file may import os/exec. The M4-T3 scanner
+// adapters (ClamAV, YARA) live here; the gate is opt-in by
+// directory, not by file, because adapters naturally come
+// in groups (driver + N scanner-specific files).
+var allowedOsExecDirs = []string{
+	"cmd/athanor/scanners",
 }
 
 // allowedInternalSyscallFiles are the specific files in internal/
@@ -177,10 +196,19 @@ func TestGateG1NoToolExecution(t *testing.T) {
 				name := strings.Trim(imp.Path.Value, `"`)
 				if reason, bad := forbiddenImports[name]; bad {
 					// os/exec is allowed in a small named set of
-					// cmd/ files (the production Podman client). The
-					// gate still forbids it everywhere else.
-					if name == "os/exec" && !root.internal && allowedOsExecFiles[filepath.Base(path)] {
-						// permitted
+					// cmd/ files (the production Podman client) and
+					// inside `allowedOsExecDirs` (the M4-T3 scanner
+					// adapters). The gate still forbids it everywhere
+					// else.
+					if name == "os/exec" && !root.internal {
+						if allowedOsExecFiles[filepath.Base(path)] {
+							// permitted (single named file)
+						} else if isUnderAllowedExecDir(path) {
+							// permitted (allowlisted directory)
+						} else {
+							t.Errorf("%s imports %q — %s", path, name, reason)
+							violations++
+						}
 					} else {
 						t.Errorf("%s imports %q — %s", path, name, reason)
 						violations++
@@ -279,6 +307,32 @@ func relPath(p string) string {
 		}
 	}
 	return cleaned
+}
+
+// isUnderAllowedExecDir reports whether the file at
+// `walkerPath` lives under one of the directories in
+// `allowedOsExecDirs`. The walker hands us paths like
+// "../../cmd/athanor/scanners/clamav.go"; the function
+// normalizes to "cmd/athanor/scanners/clamav.go" via
+// relPath, then checks whether any allowed dir is a
+// prefix. A future contributor cannot create a sibling
+// directory and have it pass: the prefix check is exact
+// (no globs).
+func isUnderAllowedExecDir(walkerPath string) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(walkerPath))
+	for _, dir := range allowedOsExecDirs {
+		// Normalize: relPath returns "cmd/..." or
+		// "internal/..." — strip the leading "cmd/"
+		// the same way relPath does (relPath keeps
+		// "cmd" in the returned path). The dirs
+		// list stores paths starting with "cmd/".
+		rel := relPath(walkerPath)
+		if rel == dir || strings.HasPrefix(rel, dir+"/") {
+			_ = cleaned
+			return true
+		}
+	}
+	return false
 }
 
 // allowedInternalSyscallIdentsKeyList returns the sorted

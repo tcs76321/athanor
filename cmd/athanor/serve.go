@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tcs76321/athanor/internal/api"
 	"github.com/tcs76321/athanor/internal/artifact"
+	"github.com/tcs76321/athanor/internal/config"
 	"github.com/tcs76321/athanor/internal/control"
 	"github.com/tcs76321/athanor/internal/engine"
 	"github.com/tcs76321/athanor/internal/evaluation"
@@ -170,6 +172,27 @@ func run(configPath, addr, stateDir string) error {
 	}
 	internalapi.New(tokenStoreAdapter{podMgr}, project.NewRepo(st), st,
 		project.NewRepo(st), defaultEnv).Register(srv.Mux())
+
+	// M4-T2: ingress pipeline. Watches <state>/workspace/inbox,
+	// routes new files through airlock/paths + airlock/scanner,
+	// disposes to .processed/ or quarantine/. The watcher is
+	// bound to the daemon's lifetime; deferred Close drains
+	// the pending queue before the process exits.
+	ingWatcher, _, err := startIngress(context.Background(), stateDir, st, killSwitch,
+		ingressConfig{
+			AirlockEnabled:       config.Val(cfg.Airlock.Enabled, true),
+			MaxIngressBytes:      cfg.Airlock.MaxIngressBytes,
+			MaxUncompressedRatio: cfg.Airlock.MaxUncompressedRatio,
+			MaxZipEntries:        cfg.Airlock.MaxZipEntries,
+		},
+		slog.Default(),
+	)
+	if err != nil {
+		return fmt.Errorf("starting ingress: %w", err)
+	}
+	if ingWatcher != nil {
+		defer func() { _ = ingWatcher.Close() }()
+	}
 
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),

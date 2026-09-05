@@ -171,24 +171,39 @@ func (s staticCap) MaxConcurrentJobs() int {
 // concurrency cap is read at enqueue time, not at construction, so
 // profile changes take effect immediately. We block on a goroutine-local
 // ticker until the in-flight count drops below the live cap, then run.
+//
+// Concurrency reservation is atomic: a single CAS increments
+// `inFlight` only when the current value is below the live cap, so two
+// goroutines polling the same `cap` cannot both pass the
+// `< cap` check and then both increment — the second CAS sees the
+// first increment and retries. A non-atomic
+// `LoadInt64 → AddInt64` here lets the cap be silently exceeded
+// under contention, which is exactly what the §24 throttle promises
+// it will not do.
 func (e *Engine) Enqueue(jobID string) {
 	go func() {
-		// Wait for a slot under the live cap. We poll with a short
-		// sleep rather than block on a condition variable: simpler,
-		// no missed-wakeup risk, the loop is cheap.
+		defer atomic.AddInt64(&e.inFlight, -1)
 		for {
 			max := e.cap.MaxConcurrentJobs()
 			if max < 1 {
 				max = 1
 			}
-			if atomic.LoadInt64(&e.inFlight) < int64(max) {
-				break
+			// Try to reserve a slot with a single CAS. If
+			// the cap is exceeded, sleep and retry; if the
+			// CAS lost a race, retry immediately so we
+			// do not burn a sleep cycle on a transient
+			// race.
+			cur := atomic.LoadInt64(&e.inFlight)
+			if cur >= int64(max) {
+				time.Sleep(50 * time.Millisecond)
+				continue
 			}
-			time.Sleep(50 * time.Millisecond)
+			if !atomic.CompareAndSwapInt64(&e.inFlight, cur, cur+1) {
+				continue
+			}
+			e.Run(context.Background(), jobID)
+			return
 		}
-		atomic.AddInt64(&e.inFlight, 1)
-		defer atomic.AddInt64(&e.inFlight, -1)
-		e.Run(context.Background(), jobID)
 	}()
 }
 

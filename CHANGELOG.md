@@ -84,6 +84,20 @@ New entries are appended at the top. Do not rewrite history.
   exercises the SQL CAS branch on a different-target race so
   both layers are pinned.
 
+- **`Engine.Enqueue` concurrency cap is now atomic (test-only
+  symptom: `TestEnqueueRespectsConcurrencyCap` flaky).**
+  The polling loop did `LoadInt64(&inFlight) < max` then
+  `AddInt64(&inFlight, 1)` as two separate ops; under
+  contention two goroutines could both pass the check and
+  both increment, silently exceeding the live cap. Replaced
+  with a single `CompareAndSwapInt64` so reservation is
+  atomic: the second CAS observes the first increment and
+  retries. The live-cap behavior (re-read on every poll,
+  mid-flight profile changes honored) is unchanged; the
+  polling ticker still backs off 50 ms when the cap is full.
+  `TestEnqueueRespectsConcurrencyCap` (M1-T8.4) is the
+  pinned contract.
+
 - **`MinJudgeConfidence = 0` end-to-end (`174f3a4`).** The
   §19.3 deterministic guard is now reachable as a disabled
   mode through config. The field is now `*float64` (mirroring

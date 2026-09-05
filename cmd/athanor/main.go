@@ -70,6 +70,8 @@ func main() {
 		err = runJob(args[1:])
 	case "artifacts":
 		err = runArtifacts(args[1:])
+	case "export":
+		err = runExport(args[1:])
 	case "freeze":
 		err = runFreeze(args[1:])
 	case "unfreeze":

@@ -133,10 +133,17 @@ func run(configPath, addr, stateDir string) error {
 	if err != nil {
 		return err
 	}
+	// Construct the artifact store and project repo
+	// once; both the engine and the egress pipeline
+	// (M4-T4) need them. Sharing the same instances
+	// ensures the egress loop sees engine writes
+	// (the artifact store is the source of truth).
+	artifactStore := artifact.NewStore(st, filepath.Join(stateDir, "artifacts"))
+	projectRepo := project.NewRepo(st)
 	eng := engine.New(cfg, st,
 		job.NewRepository(st),
-		project.NewRepo(st),
-		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
+		projectRepo,
+		artifactStore,
 		// M3-T1: EvaluationRecord repository (§19). The engine
 		// persists one record per candidate artifact during
 		// the evaluating phase; the comparison phase reads
@@ -155,9 +162,10 @@ func run(configPath, addr, stateDir string) error {
 	)
 	srv := server.New(version)
 	srv.SetControl(killSwitch)
-	api.New(project.NewRepo(st), job.NewRepository(st),
-		artifact.NewStore(st, filepath.Join(stateDir, "artifacts")),
-		eng, killSwitch, st).Register(srv.Mux())
+	externalAPI := api.New(projectRepo, job.NewRepository(st),
+		artifactStore,
+		eng, killSwitch, st)
+	externalAPI.Register(srv.Mux())
 	// M2-T3 + M2-T4: internal API for Job Pods. Same loopback HTTP
 	// server, different path prefix (/internal/v1/), every route
 	// wrapped in authMiddleware. Token store is the jobpod.Manager's
@@ -177,8 +185,10 @@ func run(configPath, addr, stateDir string) error {
 	// routes new files through airlock/paths + airlock/scanner,
 	// disposes to .processed/ or quarantine/. The watcher is
 	// bound to the daemon's lifetime; deferred Close drains
-	// the pending queue before the process exits.
-	ingWatcher, _, err := startIngress(context.Background(), stateDir, st, killSwitch,
+	// the pending queue before the process exits. The same
+	// scanner registry is reused for the egress pipeline
+	// below (M4-T4) — one registry, two pipelines.
+	ingWatcher, scannerReg, err := startIngress(context.Background(), stateDir, st, killSwitch,
 		ingressConfig{
 			AirlockEnabled:       config.Val(cfg.Airlock.Enabled, true),
 			MaxIngressBytes:      cfg.Airlock.MaxIngressBytes,
@@ -194,6 +204,26 @@ func run(configPath, addr, stateDir string) error {
 	if ingWatcher != nil {
 		defer func() { _ = ingWatcher.Close() }()
 	}
+
+	// M4-T4: egress pipeline. Subscribes to the event log
+	// for accepted artifacts and exports them to
+	// <state>/workspace/exports/. The engine is unchanged:
+	// the exporter is an observer, not a driver (ADR-0015
+	// §"Egress is a subscriber, not an engine hook"). The
+	// poll goroutine stops on ctx cancel (daemon shutdown).
+	exporter, err := startEgress(
+		context.Background(), stateDir, st,
+		artifactStore, projectRepo, scannerReg, slog.Default(),
+	)
+	if err != nil {
+		return fmt.Errorf("starting egress: %w", err)
+	}
+	// Wire the exporter into the external API so the
+	// `athanor export` CLI (and any future operator UI)
+	// can drive synchronous exports. The interface
+	// keeps the API package free of the egress import
+	// (Gate G1 keeps the dependency graph narrow).
+	externalAPI.SetManualExporter(exporter)
 
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),

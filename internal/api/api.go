@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -20,6 +21,20 @@ type Engine interface {
 	Enqueue(jobID string)
 }
 
+// ManualExporter is the surface the M4-T4 `POST /exports/{id}`
+// route uses to run a synchronous export. The egress
+// package's Exporter satisfies it; the API does not
+// import the egress package directly (Gate G1 keeps the
+// dependency graph narrow).
+type ManualExporter interface {
+	// ExportOne runs the egress pipeline on one
+	// artifact. Returns the absolute on-disk path
+	// on success (clean or no-op) and an error on
+	// a hard failure (artifact not found, scanner
+	// subprocess hung, etc.).
+	ExportOne(ctx context.Context, artifactID string) (path string, exported bool, err error)
+}
+
 // API wires the HTTP handlers to the persistence and engine layers.
 type API struct {
 	projects  *project.Repo
@@ -28,12 +43,24 @@ type API struct {
 	engine    Engine
 	freezer   *control.KillSwitch
 	db        *store.Store
+	exporter  ManualExporter
 }
 
 // New builds the API.
 func New(projects *project.Repo, jobs *job.Repository, artifacts *artifact.Store,
 	engine Engine, freezer *control.KillSwitch, db *store.Store) *API {
 	return &API{projects: projects, jobs: jobs, artifacts: artifacts, engine: engine, freezer: freezer, db: db}
+}
+
+// SetManualExporter wires the egress exporter for the
+// `POST /exports/{id}` route. The setter is a separate
+// step (rather than a New() argument) so the egress
+// package — which depends on artifact + project + store —
+// can be initialized after the API without an import
+// cycle. Callers that don't wire an exporter get a 503
+// on the manual-export route.
+func (a *API) SetManualExporter(e ManualExporter) {
+	a.exporter = e
 }
 
 // Register attaches all routes to mux.
@@ -44,6 +71,8 @@ func (a *API) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{id}/artifacts", a.handleArtifacts)
 	mux.HandleFunc("GET /jobs/{id}", a.handleJobGet)
 	mux.HandleFunc("GET /jobs/{id}/events", a.handleJobEvents)
+	// M4-T4: synchronous export on operator request.
+	mux.HandleFunc("POST /exports/{id}", a.handleExport)
 }
 
 // writeJSON is the single response writer: always JSON, always UTF-8.

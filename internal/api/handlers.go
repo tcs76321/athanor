@@ -67,6 +67,63 @@ func (a *API) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"artifacts": out})
 }
 
+// handleExport is the M4-T4 manual-export route. The
+// `athanor export -artifact <id>` CLI calls this; the
+// egress exporter's asynchronous poll also drives the
+// same code path, so a manual export is identical in
+// behavior to an automatic one. Returns 200 with the
+// on-disk path on a clean export, 200 with `exported=false`
+// on a no-op (already exported, or non-accepted artifact),
+// 404 if the artifact does not exist, 422 if the scanners
+// rejected the export, 503 if no exporter is wired.
+func (a *API) handleExport(w http.ResponseWriter, r *http.Request) {
+	if a.exporter == nil {
+		writeError(w, http.StatusServiceUnavailable,
+			"egress exporter not wired (airlock may be disabled)")
+		return
+	}
+	if a.freezer.Frozen() {
+		writeError(w, http.StatusConflict,
+			"daemon is frozen: export is paused (unfreeze with a reason first, §22.2)")
+		return
+	}
+	artifactID := r.PathValue("id")
+	if artifactID == "" {
+		writeError(w, http.StatusBadRequest, "artifact id is required")
+		return
+	}
+	path, exported, err := a.exporter.ExportOne(r.Context(), artifactID)
+	if err != nil {
+		// artifact-not-found surfaces as a 404; the
+		// other errors (subprocess hung, FS error) are
+		// 500s with the error string for the operator.
+		if isNotFoundErr(err) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":     path,
+		"exported": exported,
+	})
+}
+
+// isNotFoundErr is a small helper: the exporter's
+// artifact-store Get returns a wrapped ErrNotFound that
+// the standard errors.Is chain can match. Used to map
+// the error to a 404 in handleExport.
+func isNotFoundErr(err error) bool {
+	for err != nil {
+		if err.Error() == "artifact: not found" || err.Error() == "evaluation: record not found" {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
+}
+
 func (a *API) handleJobGet(w http.ResponseWriter, r *http.Request) {
 	j, err := a.jobs.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
